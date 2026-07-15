@@ -62,59 +62,69 @@ def _convert_pvc_mount(claim: str, mount_path: str, pvc_names: set,
     return f"{claim}:{mount_path}"
 
 
+def _resolve_data_keys(available_keys: list, items: list | None) -> list[tuple[str, str]]:
+    """Return (source_key, output_filename) pairs for a ConfigMap/Secret volume.
+
+    Without ``items``, every available key is written under its own name. With
+    ``items``, only the listed keys are written (K8s key-filtering), each
+    optionally renamed to its ``path``.
+    """
+    if items:
+        pairs = []
+        for item in items:
+            if not item:
+                continue
+            key = item.get("key")
+            if not key:
+                continue
+            pairs.append((key, item.get("path") or key))
+        return pairs
+    return [(k, k) for k in available_keys]
+
+
 def _generate_configmap_files(cm_name: str, cm_data: dict, output_dir: str,
                               generated_cms: set, warnings: list[str],
                               replacements: list[dict] | None = None,
                               service_port_map: dict | None = None,
-                              binary_data: dict | None = None) -> str:
-    """Write ConfigMap data entries as files. Returns the directory path (relative)."""
+                              binary_data: dict | None = None,
+                              items: list | None = None) -> str:
+    """Write ConfigMap data/binaryData entries as files. Returns the directory path (relative).
+
+    Honours volume ``items`` (key filtering + key→path rename), matching Secret behaviour.
+    """
     rel_dir = os.path.join("configmaps", cm_name)
     abs_dir = os.path.join(output_dir, rel_dir)
     if cm_name not in generated_cms:
         generated_cms.add(cm_name)
         os.makedirs(abs_dir, exist_ok=True)
-        for key, value in cm_data.items():
-            rewritten = str(value)
-            if service_port_map:
-                rewritten = _apply_port_remap(rewritten, service_port_map)
-            if replacements:
-                rewritten = apply_replacements(rewritten, replacements)
-            file_path = os.path.join(abs_dir, key)
+        binary_data = binary_data or {}
+        for key, out_name in _resolve_data_keys(list(cm_data) + list(binary_data), items):
+            file_path = os.path.join(abs_dir, out_name)
             if not os.path.realpath(file_path).startswith(os.path.realpath(output_dir) + os.sep):
-                warnings.append(f"ConfigMap '{cm_name}' key '{key}' would escape output directory — skipped")
+                warnings.append(f"ConfigMap '{cm_name}' key '{out_name}' would escape output directory — skipped")
                 continue
-            if "/" in key:
+            if "/" in out_name:
                 os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(rewritten)
-        for key, b64val in (binary_data or {}).items():
-            file_path = os.path.join(abs_dir, key)
-            if not os.path.realpath(file_path).startswith(os.path.realpath(output_dir) + os.sep):
-                warnings.append(f"ConfigMap '{cm_name}' binaryData key '{key}' would escape output directory — skipped")
-                continue
-            if "/" in key:
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, "wb") as f:
-                f.write(base64.b64decode(b64val))
+            if key in cm_data:
+                rewritten = str(cm_data[key])
+                if service_port_map:
+                    rewritten = _apply_port_remap(rewritten, service_port_map)
+                if replacements:
+                    rewritten = apply_replacements(rewritten, replacements)
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(rewritten)
+            elif key in binary_data:
+                with open(file_path, "wb") as f:
+                    f.write(base64.b64decode(binary_data[key]))
+            else:
+                warnings.append(f"ConfigMap '{cm_name}' item key '{key}' not found in data/binaryData — skipped")
     return f"./{rel_dir}"
 
 
 def _resolve_secret_keys(secret: dict, items: list | None) -> list[tuple[str, str]]:
     """Return (key, output_filename) pairs for a Secret volume mount."""
-    if items:
-        keys = [item["key"] for item in items if "key" in item]
-    else:
-        keys = list((secret.get("data") or {}).keys()) + list((secret.get("stringData") or {}).keys())
-    result = []
-    for key in keys:
-        out_name = key
-        if items:
-            for item in items:
-                if item.get("key") == key and "path" in item:
-                    out_name = item["path"]
-                    break
-        result.append((key, out_name))
-    return result
+    available = list((secret.get("data") or {})) + list((secret.get("stringData") or {}))
+    return _resolve_data_keys(available, items)
 
 
 def _generate_secret_files(sec_name: str, secret: dict, items: list | None,
@@ -185,7 +195,8 @@ def convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: set
                                                output_dir, generated_cms, warnings,
                                                replacements=replacements,
                                                service_port_map=service_port_map,
-                                               binary_data=cm.get("binaryData") or {})
+                                               binary_data=cm.get("binaryData") or {},
+                                               items=source.get("items"))
             result.append(_convert_data_mount(cm_dir, vm))
         elif vol_type == "secret" and secrets is not None:
             sec = secrets.get(source["name"])
