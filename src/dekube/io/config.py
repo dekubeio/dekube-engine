@@ -42,7 +42,15 @@ def load_config(path: str) -> dict:
     """Load dekube.yaml (or legacy helmfile2compose.yaml) or return empty config."""
     if os.path.exists(path):
         with open(path, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
+            try:
+                cfg = yaml.safe_load(f) or {}
+            except yaml.YAMLError as exc:
+                print(f"Error: {path} is not valid YAML: {exc}", file=sys.stderr)
+                sys.exit(1)
+        if not isinstance(cfg, dict):
+            print(f"Error: {path} must contain a YAML mapping at the top level",
+                  file=sys.stderr)
+            sys.exit(1)
     else:
         cfg = {}
 
@@ -54,6 +62,13 @@ def load_config(path: str) -> dict:
         cfg["volumes"] = {}
     if not isinstance(cfg.get("exclude"), list):
         cfg["exclude"] = []
+    # Coerce explicit-null values (Helm-style conditional blocks / commented-out
+    # sections) to empty containers so downstream .items()/iteration don't crash.
+    # Only touch keys present as null — don't inject empty keys into configs that
+    # omit them, to keep generated dekube.yaml clean.
+    for key, empty in (("overrides", {}), ("services", {}), ("replacements", [])):
+        if key in cfg and cfg[key] is None:
+            cfg[key] = empty
     return cfg
 
 

@@ -15,7 +15,7 @@ def _apply_port_remap(text: str, service_port_map: dict) -> str:
     # Group by service name, skip identity mappings and named ports
     remaps: dict[str, list[tuple[int, int]]] = {}
     for (svc_name, svc_port), container_port in service_port_map.items():
-        if not isinstance(svc_port, int) or svc_port == container_port:
+        if not isinstance(svc_port, int) or container_port is None or svc_port == container_port:
             continue
         remaps.setdefault(svc_name, []).append((svc_port, container_port))
 
@@ -140,6 +140,8 @@ def _resolve_envfrom(envfrom_list: list, configmaps: dict, secrets: dict) -> lis
     """Resolve envFrom entries (configMapRef, secretRef) into flat env vars."""
     env_vars: list[dict] = []
     for ef in envfrom_list:
+        if not ef:  # null list item (Helm conditional inside envFrom)
+            continue
         prefix = ef.get("prefix", "")
         if "configMapRef" in ef:
             cm = configmaps.get((ef["configMapRef"] or {}).get("name", ""), {})
@@ -202,6 +204,8 @@ def resolve_env(container: dict, configmaps: dict[str, dict], secrets: dict[str,
     env_vars: list[dict] = []
 
     for e in (container.get("env") or []):
+        if not e:  # null list item (Helm conditional inside env)
+            continue
         resolved = _resolve_env_entry(e, configmaps, secrets, workload_name, warnings)
         if resolved:
             env_vars.append(resolved)

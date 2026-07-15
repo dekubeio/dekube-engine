@@ -86,7 +86,7 @@ def main():
               "but consider renaming it", file=sys.stderr)
         config_path = legacy_path
     elif os.path.exists(config_path) and os.path.exists(legacy_path):
-        print(f"Stale helmfile2compose.yaml found alongside dekube.yaml "
+        print("Stale helmfile2compose.yaml found alongside dekube.yaml "
               "— ignoring it, only dekube.yaml is used", file=sys.stderr)
     first_run = not os.path.exists(config_path)
     config = load_config(config_path)

@@ -63,6 +63,6 @@ class IngressProvider(Provider):
         for rw in _REWRITERS:
             if rw.match(manifest, ctx):
                 return rw
-        name = manifest.get("metadata", {}).get("name", "?")
+        name = (manifest.get("metadata") or {}).get("name", "?")
         ctx.warnings.append(f"Ingress '{name}': no matching rewriter, skipped")
         return _NullRewriter()

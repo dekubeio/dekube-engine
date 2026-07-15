@@ -4,9 +4,15 @@ import base64
 
 
 def apply_replacements(text: str, replacements: list[dict]) -> str:
-    """Apply user-defined string replacements from config."""
-    for r in replacements:
-        text = text.replace(r["old"], r["new"])
+    """Apply user-defined string replacements from config.
+
+    Malformed entries (not a mapping, or missing ``old``) are skipped rather
+    than crashing the run — ``replacements`` is a user-edited config field.
+    """
+    for r in (replacements or []):
+        if not isinstance(r, dict) or "old" not in r:
+            continue
+        text = text.replace(r["old"], r.get("new") or "")
     return text
 
 

@@ -92,7 +92,7 @@ def _emit_kind_warnings(manifests: dict, warnings: list[str]) -> None:
     """Emit warnings for unsupported and unknown manifest kinds."""
     for kind in UNSUPPORTED_KINDS:
         for m in manifests.get(kind, []):
-            warnings.append(f"{kind} '{m.get('metadata', {}).get('name', '?')}' not supported")
+            warnings.append(f"{kind} '{(m.get('metadata') or {}).get('name', '?')}' not supported")
     known = set(CONVERTED_KINDS) | set(UNSUPPORTED_KINDS) | set(IGNORED_KINDS)
     for kind, items in manifests.items():
         if kind not in known:
@@ -125,10 +125,14 @@ def convert(manifests: dict[str, list[dict]], config: dict,
         ctx.extension_config = ext_conf
         for kind in converter.kinds:
             result = converter.convert(kind, manifests.get(kind, []), ctx)
+            if result is None:
+                warnings.append(f"converter {type(converter).__name__} returned None "
+                                f"for kind '{kind}' — skipped (missing return?)")
+                continue
             services = getattr(result, 'services', None)
             if services:
                 compose_services.update(services)
-            ingress_entries.extend(result.ingress_entries)
+            ingress_entries.extend(getattr(result, 'ingress_entries', None) or [])
 
     # Post-process all services: port remapping and replacements.
     # Idempotent — safe on services whose env vars were already rewritten by a provider.
@@ -152,7 +156,7 @@ def convert(manifests: dict[str, list[dict]], config: dict,
 
     _emit_kind_warnings(manifests, warnings)
 
-    _truncate_hostnames(compose_services)
+    _truncate_hostnames(compose_services, warnings)
 
     # Run transforms (post-processing hooks) after all alias injection
     for transform_cls in _TRANSFORMS:
@@ -194,11 +198,24 @@ def _warn_missing_fqdn(compose_services: dict, network_aliases: dict,
             )
 
 
-def _truncate_hostnames(compose_services: dict) -> None:
-    """Set explicit shorter hostname for services >63 chars (Linux hostname limit)."""
+def _truncate_hostnames(compose_services: dict, warnings: list[str]) -> None:
+    """Set explicit shorter hostname for services >63 chars (Linux hostname limit).
+
+    Strips trailing '-' (a hostname may not end in a dash — Docker refuses
+    sethostname) and warns when two truncated names collide.
+    """
+    seen: dict[str, str] = {}
     for svc_name, svc in compose_services.items():
         if len(svc_name) > 63 and "hostname" not in svc:
-            svc["hostname"] = svc_name[:63]
+            truncated = svc_name[:63].rstrip("-")
+            if truncated in seen:
+                warnings.append(
+                    f"hostname for '{svc_name}' truncates to '{truncated}', "
+                    f"colliding with '{seen[truncated]}' — set an explicit hostname "
+                    f"in overrides to disambiguate"
+                )
+            seen[truncated] = svc_name
+            svc["hostname"] = truncated
 
 
 # Base classes to skip during auto-registration

@@ -16,10 +16,12 @@ def _build_vol_map(pod_volumes: list,
     """
     vol_map = {}
     for vct in (volume_claim_templates or []):
-        vname = vct.get("metadata", {}).get("name", "")
+        vname = (vct.get("metadata") or {}).get("name", "")
         if vname:
             vol_map[vname] = {"type": "pvc", "claim": vname}
     for v in pod_volumes:
+        if not v:  # null list item (Helm conditional inside volumes)
+            continue
         vname = v.get("name", "")
         if "persistentVolumeClaim" in v:
             pvc = v["persistentVolumeClaim"] or {}
@@ -78,20 +80,20 @@ def _generate_configmap_files(cm_name: str, cm_data: dict, output_dir: str,
             if replacements:
                 rewritten = apply_replacements(rewritten, replacements)
             file_path = os.path.join(abs_dir, key)
-            if "/" in key:
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)
             if not os.path.realpath(file_path).startswith(os.path.realpath(output_dir) + os.sep):
                 warnings.append(f"ConfigMap '{cm_name}' key '{key}' would escape output directory — skipped")
                 continue
+            if "/" in key:
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(rewritten)
         for key, b64val in (binary_data or {}).items():
             file_path = os.path.join(abs_dir, key)
-            if "/" in key:
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)
             if not os.path.realpath(file_path).startswith(os.path.realpath(output_dir) + os.sep):
                 warnings.append(f"ConfigMap '{cm_name}' binaryData key '{key}' would escape output directory — skipped")
                 continue
+            if "/" in key:
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
             with open(file_path, "wb") as f:
                 f.write(base64.b64decode(b64val))
     return f"./{rel_dir}"
@@ -133,11 +135,11 @@ def _generate_secret_files(sec_name: str, secret: dict, items: list | None,
             if replacements:
                 val = apply_replacements(val, replacements)
             out_path = os.path.join(abs_dir, out_name)
-            if "/" in out_name:
-                os.makedirs(os.path.dirname(out_path), exist_ok=True)
             if not os.path.realpath(out_path).startswith(os.path.realpath(output_dir) + os.sep):
                 warnings.append(f"Secret '{sec_name}' key '{out_name}' would escape output directory — skipped")
                 continue
+            if "/" in out_name:
+                os.makedirs(os.path.dirname(out_path), exist_ok=True)
             with open(out_path, "w", encoding="utf-8") as f:
                 f.write(val)
     return f"./{rel_dir}"
@@ -164,6 +166,8 @@ def convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: set
     vol_map = _build_vol_map(pod_volumes, volume_claim_templates)
     result = []
     for vm in volume_mounts:
+        if not vm:  # null list item (Helm conditional inside volumeMounts)
+            continue
         source = vol_map.get(vm.get("name", ""), {})
         mount_path = vm.get("mountPath", "")
         vol_type = source.get("type")

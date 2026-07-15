@@ -46,7 +46,16 @@ def run_helmfile_template(helmfile_dir: str, output_dir: str,
         cmd.extend(["--environment", environment])
     cmd.extend(["template", "--output-dir", rendered_dir])
     print(f"Running: {' '.join(cmd)}", file=sys.stderr)
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True)
+    except FileNotFoundError:
+        print("Error: 'helmfile' not found in PATH — install helmfile or use --from-dir "
+              "with pre-rendered manifests", file=sys.stderr)
+        sys.exit(1)
+    except subprocess.CalledProcessError as exc:
+        print(f"Error: helmfile template failed (exit {exc.returncode}) — see output above",
+              file=sys.stderr)
+        sys.exit(1)
     # Nested helmfiles: helmfile creates per-child .helmfile-rendered dirs
     # instead of putting everything in the --output-dir target. Consolidate.
     helmfile_root = Path(helmfile_dir).resolve()
@@ -94,26 +103,29 @@ def parse_manifests(rendered_dir: str) -> dict[str, list[dict]]:
 def _extract_release_name(release_dir: str) -> str:
     """Extract the release name from a helmfile output directory name.
 
-    Directory format: ``helmfile.yaml-<hash>-<release-name>`` or just ``<name>``.
+    Directory format: ``<helmfile-filename>-<hash>-<release-name>`` or just
+    ``<name>``. The helmfile filename may be ``helmfile.yaml``/``helmfile.yml``
+    and carry a ``.gotmpl`` suffix (both are supported by run_helmfile_template).
     """
-    # "helmfile.yaml" prefix is constant, followed by 8-char hex hash
-    # e.g. "helmfile.yaml-01df6c56-minio" → "minio"
-    prefix = "helmfile.yaml-"
-    if release_dir.startswith(prefix):
-        rest = release_dir[len(prefix):]
-        # Skip the hash part (first segment before '-')
-        idx = rest.find("-")
-        return rest[idx + 1:] if idx >= 0 else rest
+    # e.g. "helmfile.yaml-01df6c56-minio" or
+    #      "helmfile.yaml.gotmpl-01df6c56-minio" → "minio"
+    for prefix in ("helmfile.yaml.gotmpl-", "helmfile.yml.gotmpl-",
+                   "helmfile.yaml-", "helmfile.yml-"):
+        if release_dir.startswith(prefix):
+            rest = release_dir[len(prefix):]
+            # Skip the hash part (first segment before '-')
+            idx = rest.find("-")
+            return rest[idx + 1:] if idx >= 0 else rest
     return release_dir
 
 
 def _collect_known_namespaces(manifests: dict[str, list[dict]]) -> set[str]:
     """Collect all namespaces seen in manifests (declared + referenced)."""
-    known = {m.get("metadata", {}).get("name", "")
+    known = {(m.get("metadata") or {}).get("name", "")
              for m in manifests.get("Namespace", [])} - {""}
     for kind_list in manifests.values():
         for m in kind_list:
-            ns = m.get("metadata", {}).get("namespace", "")
+            ns = (m.get("metadata") or {}).get("namespace", "")
             if ns:
                 known.add(ns)
     return known
@@ -135,7 +147,7 @@ def _build_dir_ns_map(manifests: dict[str, list[dict]],
             rd = m.get("_release_dir", "")
             if rd:
                 all_release_dirs.add(rd)
-                ns = m.get("metadata", {}).get("namespace", "")
+                ns = (m.get("metadata") or {}).get("namespace", "")
                 if ns and rd not in dir_ns:
                     dir_ns[rd] = ns
 
@@ -155,7 +167,9 @@ def _infer_namespaces(manifests: dict[str, list[dict]],
     dir_ns = _build_dir_ns_map(manifests, release_ns_map)
     for kind_list in manifests.values():
         for m in kind_list:
-            if not m.get("metadata", {}).get("namespace", ""):
+            if not (m.get("metadata") or {}).get("namespace", ""):
                 rd = m.get("_release_dir", "")
                 if rd in dir_ns:
-                    m.setdefault("metadata", {})["namespace"] = dir_ns[rd]
+                    if not m.get("metadata"):
+                        m["metadata"] = {}
+                    m["metadata"]["namespace"] = dir_ns[rd]

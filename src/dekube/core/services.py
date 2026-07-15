@@ -16,7 +16,7 @@ def _index_workloads(manifests: dict) -> list[tuple[dict, str]]:
     result = []
     for kind in WORKLOAD_KINDS:
         for m in manifests.get(kind, []):
-            meta = m.get("metadata", {})
+            meta = m.get("metadata") or {}
             result.append((meta.get("labels") or {}, meta.get("name", "")))
     return result
 
@@ -53,10 +53,10 @@ def build_alias_map(manifests: dict, services_by_selector: dict) -> dict[str, st
     known_workloads = {wl_name for _, wl_name in workloads}
     external_names = []
     for svc_manifest in manifests.get("Service", []):
-        spec = svc_manifest.get("spec", {})
+        spec = svc_manifest.get("spec") or {}
         if spec.get("type") != "ExternalName":
             continue
-        svc_name = svc_manifest.get("metadata", {}).get("name", "")
+        svc_name = (svc_manifest.get("metadata") or {}).get("name", "")
         target = _K8S_DNS_RE.sub(r'\1', spec.get("externalName", ""))
         external_names.append((svc_name, target))
 
@@ -113,7 +113,7 @@ def build_service_port_map(manifests: dict, services_by_selector: dict) -> dict:
     workload_ports: dict[str, list] = {}
     for kind in WORKLOAD_KINDS:
         for m in manifests.get(kind, []):
-            name = m.get("metadata", {}).get("name", "")
+            name = (m.get("metadata") or {}).get("name", "")
             containers = ((m.get("spec") or {}).get("template") or {}).get("spec") or {}
             containers = containers.get("containers") or []
             all_ports = []
@@ -130,11 +130,13 @@ def build_service_port_map(manifests: dict, services_by_selector: dict) -> dict:
         wl_name = _match_selector(selector, workloads)
         matched_ports = workload_ports.get(wl_name, []) if wl_name else []
 
-        for sp in svc_info.get("ports", []):
+        for sp in (svc_info.get("ports") or []):
             svc_port_num = sp.get("port")
             if svc_port_num is None:
                 continue
-            target = sp.get("targetPort", svc_port_num)
+            # targetPort may be rendered as explicit null (empty Helm template) —
+            # `or` falls back to the service port so URLs don't become "svc:None".
+            target = sp.get("targetPort") or svc_port_num
             if isinstance(target, str):
                 target = resolve_named_port(target, matched_ports)
             if isinstance(target, str):
