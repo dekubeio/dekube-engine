@@ -13,6 +13,7 @@ from dekube.pacts.ingress import IngressRewriter, get_ingress_class, resolve_bac
 from dekube.pacts.helpers import (
     apply_replacements, secret_value, log, generate_password, is_excluded,
     iter_workloads, iter_named_containers, apply_alias_map, rewrite_k8s_dns,
+    write_configmap_files, write_secret_files,
 )
 from dekube.core.env import resolve_env, convert_command
 from dekube.core.ingress import IngressProvider
@@ -53,6 +54,8 @@ __all__ = [
     "iter_named_containers",
     "apply_alias_map",
     "rewrite_k8s_dns",
+    "write_configmap_files",
+    "write_secret_files",
     # K8s-to-compose conversion primitives (pod specs, volumes, ports, commands)
     "convert_command",
     "convert_volume_mounts",

@@ -103,3 +103,34 @@ def apply_alias_map(text: str, alias_map: dict[str, str]) -> str:
 def rewrite_k8s_dns(text: str) -> str:
     """Replace <svc>.<ns>.svc[.cluster.local] with just <svc>."""
     return _K8S_DNS_RE.sub(r'\1', text)
+
+
+def write_configmap_files(name: str, ctx, items=None):
+    """Emit a ConfigMap's data as files under output_dir/configmaps/<name>/.
+
+    Returns the relative dir (``./configmaps/<name>``) or None (+ ctx.warnings) if absent.
+    """
+    from dekube.core.volumes import _generate_configmap_files  # local: avoid import cycle
+    cm = ctx.configmaps.get(name)
+    if cm is None:
+        ctx.warnings.append(f"ConfigMap '{name}' not found")
+        return None
+    return _generate_configmap_files(
+        name, cm.get("data") or {}, ctx.output_dir, ctx.generated_cms, ctx.warnings,
+        binary_data=cm.get("binaryData") or {}, items=items,
+    )
+
+
+def write_secret_files(name: str, ctx, items=None):
+    """Emit a Secret's data as files under output_dir/secrets/<name>/.
+
+    Returns the relative dir (``./secrets/<name>``) or None (+ ctx.warnings) if absent.
+    """
+    from dekube.core.volumes import _generate_secret_files  # local: avoid import cycle
+    sec = ctx.secrets.get(name)
+    if sec is None:
+        ctx.warnings.append(f"Secret '{name}' not found")
+        return None
+    return _generate_secret_files(
+        name, sec, items, ctx.output_dir, ctx.generated_secrets, ctx.warnings,
+    )
