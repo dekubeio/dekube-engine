@@ -111,7 +111,9 @@ def write_configmap_files(name: str, ctx, items: list | None = None) -> str | No
 
     Returns the relative dir (``./configmaps/<name>``) or None (+ ctx.warnings) if absent.
     """
-    from dekube.core.volumes import _generate_configmap_files  # local: avoid import cycle
+    # deferred import breaks the pacts.helpers↔core.volumes cycle at runtime; the
+    # graph-level warnings pylint still raises for it are therefore intentional.
+    from dekube.core.volumes import _generate_configmap_files  # pylint: disable=import-outside-toplevel,cyclic-import
     cm = ctx.configmaps.get(name)
     if cm is None:
         ctx.warnings.append(f"ConfigMap '{name}' not found")
@@ -127,7 +129,9 @@ def write_secret_files(name: str, ctx, items: list | None = None) -> str | None:
 
     Returns the relative dir (``./secrets/<name>``) or None (+ ctx.warnings) if absent.
     """
-    from dekube.core.volumes import _generate_secret_files  # local: avoid import cycle
+    # deferred import breaks the pacts.helpers↔core.volumes cycle at runtime; the
+    # graph-level warnings pylint still raises for it are therefore intentional.
+    from dekube.core.volumes import _generate_secret_files  # pylint: disable=import-outside-toplevel,cyclic-import
     sec = ctx.secrets.get(name)
     if sec is None:
         ctx.warnings.append(f"Secret '{name}' not found")
