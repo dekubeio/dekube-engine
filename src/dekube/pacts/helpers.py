@@ -2,11 +2,12 @@
 
 import base64
 import fnmatch
+import re
 import secrets
 import string
 import sys
 
-from dekube.core.constants import WORKLOAD_KINDS
+from dekube.core.constants import WORKLOAD_KINDS, _K8S_DNS_RE
 
 
 def apply_replacements(text: str, replacements: list[dict]) -> str:
@@ -85,3 +86,20 @@ def iter_named_containers(name: str, pod_spec: dict):
     for sc in containers[1:]:
         if sc:
             yield f"{name}-sidecar-{sc.get('name', 'sidecar')}", sc
+
+
+def apply_alias_map(text: str, alias_map: dict[str, str]) -> str:
+    """Replace K8s Service names with compose service names in hostname positions.
+
+    Matches aliases preceded by / or @ (URLs, Redis URIs) and followed by
+    / : whitespace, quotes, or end-of-string — so only hostnames are affected,
+    not substrings like bucket names.
+    """
+    for alias, target in (alias_map or {}).items():
+        text = re.sub(r'(?<=[/@])' + re.escape(alias) + r'''(?=[/:\s"']|$)''', target, text)
+    return text
+
+
+def rewrite_k8s_dns(text: str) -> str:
+    """Replace <svc>.<ns>.svc[.cluster.local] with just <svc>."""
+    return _K8S_DNS_RE.sub(r'\1', text)

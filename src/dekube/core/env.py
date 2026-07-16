@@ -45,24 +45,6 @@ def _apply_port_remap(text: str, service_port_map: dict) -> str:
     return text
 
 
-def _apply_alias_map(text: str, alias_map: dict[str, str]) -> str:
-    """Replace K8s Service names with compose service names in hostname positions.
-
-    Matches aliases preceded by :// or @ (URLs, Redis URIs) and followed by
-    / : whitespace, quotes, or end-of-string — so only hostnames are affected,
-    not substrings like bucket names.
-    """
-    for alias, target in alias_map.items():
-        text = re.sub(
-            r'(?<=[/@])'          # preceded by / (in ://) or @
-            + re.escape(alias)
-            + r'''(?=[/:\s"']|$)''',  # followed by / : whitespace quotes or end
-            target,
-            text,
-        )
-    return text
-
-
 def _resolve_k8s_var_refs(obj, env_dict: dict[str, str]):
     """Replace K8s $(VAR_NAME) references with actual env var values.
 
