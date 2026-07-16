@@ -10,7 +10,9 @@ from dekube.pacts.types import (
     Converter, IndexerConverter, Provider,
 )
 from dekube.pacts.ingress import IngressRewriter, get_ingress_class, resolve_backend
-from dekube.pacts.helpers import apply_replacements, secret_value
+from dekube.pacts.helpers import (
+    apply_replacements, secret_value, log, generate_password, is_excluded,
+)
 from dekube.core.env import resolve_env, convert_command
 from dekube.core.ingress import IngressProvider
 from dekube.core.volumes import convert_volume_mounts
@@ -43,6 +45,9 @@ __all__ = [
     "apply_replacements",
     "resolve_env",
     "secret_value",
+    "log",
+    "generate_password",
+    "is_excluded",
     # K8s-to-compose conversion primitives (pod specs, volumes, ports, commands)
     "convert_command",
     "convert_volume_mounts",

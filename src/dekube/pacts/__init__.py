@@ -6,7 +6,9 @@ from dekube.pacts.types import (
     Converter, IndexerConverter, Provider,
 )
 from dekube.pacts.ingress import IngressRewriter, get_ingress_class, resolve_backend
-from dekube.pacts.helpers import apply_replacements, secret_value
+from dekube.pacts.helpers import (
+    apply_replacements, secret_value, log, generate_password, is_excluded,
+)
 from dekube.core.env import resolve_env
 
 # Backward compat alias (deprecated — use secret_value)
@@ -26,5 +28,8 @@ __all__ = [
     "apply_replacements",
     "resolve_env",
     "secret_value",
+    "log",
+    "generate_password",
+    "is_excluded",
     "_secret_value",
 ]
