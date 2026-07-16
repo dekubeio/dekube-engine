@@ -6,6 +6,7 @@ import re
 import secrets
 import string
 import sys
+from collections.abc import Iterator
 
 from dekube.core.constants import WORKLOAD_KINDS, _K8S_DNS_RE
 
@@ -59,7 +60,7 @@ def is_excluded(name: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatch(name, pat) for pat in (patterns or []))
 
 
-def iter_workloads(manifests: dict):
+def iter_workloads(manifests: dict) -> Iterator[tuple[str, dict]]:
     """Yield (workload_name, pod_spec) for every workload manifest (null-safe)."""
     for kind in WORKLOAD_KINDS:
         for m in manifests.get(kind) or []:
@@ -71,7 +72,7 @@ def iter_workloads(manifests: dict):
             yield name, pod_spec
 
 
-def iter_named_containers(name: str, pod_spec: dict):
+def iter_named_containers(name: str, pod_spec: dict) -> Iterator[tuple[str, dict]]:
     """Yield (compose_service_name, container) for main, init and sidecar containers.
 
     Naming matches the workload converter: main -> name,
@@ -105,7 +106,7 @@ def rewrite_k8s_dns(text: str) -> str:
     return _K8S_DNS_RE.sub(r'\1', text)
 
 
-def write_configmap_files(name: str, ctx, items=None):
+def write_configmap_files(name: str, ctx, items: list | None = None) -> str | None:
     """Emit a ConfigMap's data as files under output_dir/configmaps/<name>/.
 
     Returns the relative dir (``./configmaps/<name>``) or None (+ ctx.warnings) if absent.
@@ -121,7 +122,7 @@ def write_configmap_files(name: str, ctx, items=None):
     )
 
 
-def write_secret_files(name: str, ctx, items=None):
+def write_secret_files(name: str, ctx, items: list | None = None) -> str | None:
     """Emit a Secret's data as files under output_dir/secrets/<name>/.
 
     Returns the relative dir (``./secrets/<name>``) or None (+ ctx.warnings) if absent.
