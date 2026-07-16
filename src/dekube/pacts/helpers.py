@@ -6,6 +6,8 @@ import secrets
 import string
 import sys
 
+from dekube.core.constants import WORKLOAD_KINDS
+
 
 def apply_replacements(text: str, replacements: list[dict]) -> str:
     """Apply user-defined string replacements from config.
@@ -54,3 +56,32 @@ def generate_password(length: int = 24) -> str:
 def is_excluded(name: str, patterns: list[str]) -> bool:
     """True if ``name`` matches any fnmatch pattern in ``patterns`` (null-safe)."""
     return any(fnmatch.fnmatch(name, pat) for pat in (patterns or []))
+
+
+def iter_workloads(manifests: dict):
+    """Yield (workload_name, pod_spec) for every workload manifest (null-safe)."""
+    for kind in WORKLOAD_KINDS:
+        for m in manifests.get(kind) or []:
+            if not m:
+                continue
+            name = (m.get("metadata") or {}).get("name", "unknown")
+            spec = m.get("spec") or {}
+            pod_spec = spec if kind == "Pod" else (spec.get("template") or {}).get("spec") or {}
+            yield name, pod_spec
+
+
+def iter_named_containers(name: str, pod_spec: dict):
+    """Yield (compose_service_name, container) for main, init and sidecar containers.
+
+    Naming matches the workload converter: main -> name,
+    init -> "<name>-init-<cname>", sidecar -> "<name>-sidecar-<cname>".
+    """
+    containers = pod_spec.get("containers") or []
+    if containers and containers[0]:
+        yield name, containers[0]
+    for ic in pod_spec.get("initContainers") or []:
+        if ic:
+            yield f"{name}-init-{ic.get('name', 'init')}", ic
+    for sc in containers[1:]:
+        if sc:
+            yield f"{name}-sidecar-{sc.get('name', 'sidecar')}", sc

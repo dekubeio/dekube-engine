@@ -8,6 +8,7 @@ from dekube.pacts.types import (
 from dekube.pacts.ingress import IngressRewriter, get_ingress_class, resolve_backend
 from dekube.pacts.helpers import (
     apply_replacements, secret_value, log, generate_password, is_excluded,
+    iter_workloads, iter_named_containers,
 )
 from dekube.core.env import resolve_env
 
@@ -31,5 +32,7 @@ __all__ = [
     "log",
     "generate_password",
     "is_excluded",
+    "iter_workloads",
+    "iter_named_containers",
     "_secret_value",
 ]
