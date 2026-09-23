@@ -6,7 +6,13 @@ import re
 AUTO_EXCLUDE_PATTERNS = ("cert-manager", "ingress", "reflector")
 
 # K8s internal DNS → compose service name
+# CBA: a leading pod label (StatefulSet ordinal) is absorbed and discarded, so
+# pod-0.svc and pod-1.svc both collapse to svc — compose runs one replica, so
+# the ordinal has nowhere to go. Upgrade path: map ordinals to distinct compose
+# services when replica support exists.
 _K8S_DNS_RE = re.compile(
+    r'(?<![a-z0-9.-])'                             # left boundary: don't start mid-hostname
+    r'(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)?'      # pod label, e.g. StatefulSet ordinal (discarded)
     r'([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.'       # service name (captured)
     r'(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.'       # namespace (discarded)
     r'svc(?:\.cluster\.local)?'                    # svc[.cluster.local]
