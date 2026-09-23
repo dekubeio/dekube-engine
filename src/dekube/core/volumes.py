@@ -255,7 +255,7 @@ def _warn_legacy_vct_mappings(manifests: dict, config: dict, warnings: list[str]
         if len(claims) > 1:
             warnings.append(f"PVC collision: {', '.join(claims)} share legacy mapping "
                             f"'{vname}' (same data directory) — give each its own "
-                            f"entry in dekube.yaml")
+                            f"entry and host_path in dekube.yaml")
 
 
 # Backward compat alias (deprecated)
