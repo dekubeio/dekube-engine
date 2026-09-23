@@ -11,7 +11,7 @@ AUTO_EXCLUDE_PATTERNS = ("cert-manager", "ingress", "reflector")
 # the ordinal has nowhere to go. Upgrade path: map ordinals to distinct compose
 # services when replica support exists.
 _K8S_DNS_RE = re.compile(
-    r'(?<![a-z0-9.-])'                             # left boundary: don't start mid-hostname
+    r'(?<![a-z0-9._-])'                            # left boundary: don't start mid-hostname
     r'(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)?'      # pod label, e.g. StatefulSet ordinal (discarded)
     r'([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.'       # service name (captured)
     r'(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.'       # namespace (discarded)
