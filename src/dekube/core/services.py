@@ -12,12 +12,19 @@ def resolve_named_port(name: str, container_ports: list) -> int | str:
 
 
 def _index_workloads(manifests: dict) -> list[tuple[dict, str]]:
-    """Index workload labels → workload name for Deployments and StatefulSets."""
+    """Index pod labels → workload name (Services select pods, not workloads)."""
     result = []
     for kind in WORKLOAD_KINDS:
         for m in manifests.get(kind, []):
+            if not m:
+                continue
             meta = m.get("metadata") or {}
-            result.append((meta.get("labels") or {}, meta.get("name", "")))
+            if kind == "Pod":
+                labels = meta.get("labels") or {}
+            else:
+                template = (m.get("spec") or {}).get("template") or {}
+                labels = (template.get("metadata") or {}).get("labels") or {}
+            result.append((labels, meta.get("name", "")))
     return result
 
 
