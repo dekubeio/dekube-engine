@@ -1,6 +1,7 @@
 """K8s Service indexing — alias maps, port maps, network aliases."""
 
 from dekube.core.constants import WORKLOAD_KINDS, _K8S_DNS_RE
+from dekube.pacts.helpers import is_excluded
 
 
 def resolve_named_port(name: str, container_ports: list) -> int | str:
@@ -82,13 +83,19 @@ def build_alias_map(manifests: dict, services_by_selector: dict) -> dict[str, st
 
 
 def _build_network_aliases(services_by_selector: dict,
-                           alias_map: dict[str, str]) -> dict[str, list[str]]:
+                           alias_map: dict[str, str],
+                           manifests: dict | None = None,
+                           exclude: list[str] | None = None) -> dict[str, list[str]]:
     """Build Docker Compose network aliases for each compose service.
 
     For each K8s Service, resolve its compose service name (via alias_map or
     direct match) and add FQDN aliases (svc.ns.svc.cluster.local, svc.ns.svc,
     svc.ns) plus a short alias if the K8s Service name differs from the compose
     service name.
+
+    For each StatefulSet (from ``manifests``, minus ``exclude``) whose governing
+    Service (spec.serviceName) maps to it, also add the pod FQDNs
+    <sts>-0.<svc>[.ns[.svc[.cluster.local]]].
 
     Returns {compose_service_name: [alias1, alias2, ...]}.
     """
@@ -107,7 +114,40 @@ def _build_network_aliases(services_by_selector: dict,
                          f"{svc_name}.{ns}"):
                 if fqdn not in svc_aliases:
                     svc_aliases.append(fqdn)
+    _add_statefulset_pod_aliases(aliases, services_by_selector, alias_map,
+                                 manifests, exclude)
     return aliases
+
+
+def _add_statefulset_pod_aliases(aliases: dict[str, list[str]],
+                                 services_by_selector: dict,
+                                 alias_map: dict[str, str],
+                                 manifests: dict | None,
+                                 exclude: list[str] | None) -> None:
+    """Add pod FQDN aliases (<sts>-0.<serviceName>...) for StatefulSets whose
+    governing headless Service selects them."""
+    for m in (manifests or {}).get("StatefulSet") or []:
+        if not m:
+            continue
+        sts = (m.get("metadata") or {}).get("name", "")
+        svc_name = (m.get("spec") or {}).get("serviceName")
+        if not sts or not svc_name or is_excluded(sts, exclude):
+            continue
+        svc_info = services_by_selector.get(svc_name)
+        if svc_info is None or alias_map.get(svc_name, svc_name) != sts:
+            continue  # governing Service missing or selects another workload
+        ns = svc_info.get("namespace", "")
+        # CBA: ordinal 0 only — compose runs one replica per workload; per-ordinal
+        # compose services (<sts>-1, ...) if replicas ever get supported.
+        pod = f"{sts}-0.{svc_name}"
+        pod_aliases = [pod]
+        if ns:
+            pod_aliases += [f"{pod}.{ns}", f"{pod}.{ns}.svc",
+                            f"{pod}.{ns}.svc.cluster.local"]
+        sts_aliases = aliases.setdefault(sts, [])
+        for alias in pod_aliases:
+            if alias not in sts_aliases:
+                sts_aliases.append(alias)
 
 
 def build_service_port_map(manifests: dict, services_by_selector: dict) -> dict:

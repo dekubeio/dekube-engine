@@ -144,7 +144,8 @@ def convert(manifests: dict[str, list[dict]], config: dict,
     _postprocess_env(compose_services, ctx)
 
     # Add network aliases so K8s FQDNs resolve via compose DNS
-    network_aliases = _build_network_aliases(ctx.services_by_selector, ctx.alias_map)
+    network_aliases = _build_network_aliases(ctx.services_by_selector, ctx.alias_map,
+                                             manifests, config.get("exclude"))
     _inject_network_aliases(compose_services, network_aliases)
     _warn_missing_fqdn(compose_services, network_aliases, ctx.services_by_selector, warnings)
 
