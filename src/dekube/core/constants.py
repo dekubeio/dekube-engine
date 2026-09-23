@@ -10,6 +10,7 @@ _K8S_DNS_RE = re.compile(
     r'([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.'       # service name (captured)
     r'(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.'       # namespace (discarded)
     r'svc(?:\.cluster\.local)?'                    # svc[.cluster.local]
+    r'(?![a-z0-9-]|\.[a-z0-9])'                    # must end the hostname
 )
 
 # Placeholder for referencing secrets in overrides/custom services: $secret:<name>:<key>
