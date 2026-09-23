@@ -11,8 +11,9 @@ from dekube.pacts.helpers import secret_value
 from dekube.core.constants import (
     UNSUPPORTED_KINDS, IGNORED_KINDS, _SECRET_REF_RE,
 )
-from dekube.core.env import _postprocess_env
+from dekube.core.env import _postprocess_env, _escape_env_dollars
 from dekube.core.services import _build_network_aliases
+from dekube.core.volumes import _warn_legacy_vct_mappings
 
 # No built-in converters — distributions/extensions populate this
 _CONVERTERS = []
@@ -61,7 +62,8 @@ def _resolve_secret_refs(obj, secrets: dict, warnings: list[str]):
             if val is None:
                 warnings.append(f"$secret ref: key '{sec_key}' not found in Secret '{sec_name}'")
                 return m.group(0)
-            return val
+            # resolved into compose text — escape so compose doesn't interpolate it
+            return val.replace("$", "$$")
         return _SECRET_REF_RE.sub(_replace, obj)
     if isinstance(obj, list):
         return [_resolve_secret_refs(item, secrets, warnings) for item in obj]
@@ -134,6 +136,9 @@ def convert(manifests: dict[str, list[dict]], config: dict,
                 compose_services.update(services)
             ingress_entries.extend(getattr(result, 'ingress_entries', None) or [])
 
+    if not first_run:
+        _warn_legacy_vct_mappings(manifests, config, warnings)
+
     # Post-process all services: port remapping and replacements.
     # Idempotent — safe on services whose env vars were already rewritten by a provider.
     _postprocess_env(compose_services, ctx)
@@ -166,6 +171,10 @@ def convert(manifests: dict[str, list[dict]], config: dict,
             print(f"Transform disabled: {ext_name}", file=sys.stderr)
             continue
         transform_cls.transform(compose_services, ingress_entries, ctx)
+
+    # Escape $ in generated env so compose doesn't interpolate secrets.
+    # After transforms (they add env too), before overrides (user values stay raw).
+    _escape_env_dollars(compose_services)
 
     # Overrides run after transforms so transform-created services can be overridden
     _apply_overrides(compose_services, config, ctx.secrets, warnings)

@@ -162,6 +162,21 @@ def _postprocess_env(services: dict, ctx) -> None:
                 env[key] = val
 
 
+def _escape_env_dollars(services: dict) -> None:
+    """Escape $ as $$ in environment values so compose passes them through literally.
+
+    Runs once, after transforms (they may add env) and before user overrides
+    (user-written values may use compose interpolation on purpose).
+    """
+    for svc in services.values():
+        env = svc.get("environment")
+        if not env or not isinstance(env, dict):
+            continue
+        for key, val in env.items():
+            if isinstance(val, str) and "$" in val:
+                env[key] = val.replace("$", "$$")
+
+
 def _rewrite_env_values(env_vars: list[dict],
                         replacements: list[dict] | None = None,
                         service_port_map: dict | None = None) -> None:

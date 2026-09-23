@@ -3,21 +3,31 @@
 import base64
 import os
 
-from dekube.pacts.helpers import apply_replacements, secret_value
+from dekube.pacts.helpers import apply_replacements, is_excluded, secret_value
 from dekube.core.env import _apply_port_remap
 
 
 def _build_vol_map(pod_volumes: list,
-                    volume_claim_templates: list | None = None) -> dict:
+                    volume_claim_templates: list | None = None,
+                    sts_name: str | None = None) -> dict:
     """Build a map of volume name → volume source from pod spec volumes.
 
     For StatefulSets, volumeClaimTemplates define implicit PVC volumes
-    whose name matches the template metadata.name.
+    mounted by the template metadata.name; their claim is <vct>-<sts>
+    (bare <vct> kept as legacy_claim for pre-existing dekube.yaml mappings).
     """
     vol_map = {}
     for vct in (volume_claim_templates or []):
+        if not vct:
+            continue
         vname = (vct.get("metadata") or {}).get("name", "")
-        if vname:
+        if not vname:
+            continue
+        if sts_name:
+            # K8s names it <vct>-<sts>-<ordinal>; compose runs one replica → <vct>-<sts>
+            vol_map[vname] = {"type": "pvc", "claim": f"{vname}-{sts_name}",
+                              "legacy_claim": vname}
+        else:
             vol_map[vname] = {"type": "pvc", "claim": vname}
     for v in pod_volumes:
         if not v:  # null list item (Helm conditional inside volumes)
@@ -49,10 +59,16 @@ def _resolve_host_path(host_path: str, volume_root: str) -> str:
 
 
 def _convert_pvc_mount(claim: str, mount_path: str, pvc_names: set,
-                       config: dict, warnings: list[str]) -> str:
+                       config: dict, warnings: list[str],
+                       legacy_claim: str | None = None) -> str:
     """Convert a PVC volume mount to a compose volume string."""
+    volumes_cfg = config.get("volumes") or {}
+    if legacy_claim and claim not in volumes_cfg and legacy_claim in volumes_cfg:
+        # dekube.yaml from before <vct>-<sts> naming: keep the user's data path.
+        # Warned once per claim by _warn_legacy_vct_mappings.
+        claim = legacy_claim
     pvc_names.add(claim)
-    vol_cfg = config.get("volumes", {}).get(claim)
+    vol_cfg = volumes_cfg.get(claim)
     if vol_cfg and isinstance(vol_cfg, dict) and "host_path" in vol_cfg:
         resolved = _resolve_host_path(vol_cfg["host_path"], config.get("volume_root", "./data"))
         return f"{resolved}:{mount_path}"
@@ -171,9 +187,13 @@ def convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: set
                            generated_secrets: set | None = None,
                            replacements: list[dict] | None = None,
                            service_port_map: dict | None = None,
-                           volume_claim_templates: list | None = None) -> list[str]:
-    """Convert volumeMounts to docker-compose volume strings."""
-    vol_map = _build_vol_map(pod_volumes, volume_claim_templates)
+                           volume_claim_templates: list | None = None,
+                           sts_name: str | None = None) -> list[str]:
+    """Convert volumeMounts to docker-compose volume strings.
+
+    Pass ``sts_name`` for StatefulSets so volumeClaimTemplate claims are named <vct>-<sts>.
+    """
+    vol_map = _build_vol_map(pod_volumes, volume_claim_templates, sts_name)
     result = []
     for vm in volume_mounts:
         if not vm:  # null list item (Helm conditional inside volumeMounts)
@@ -183,7 +203,8 @@ def convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: set
         vol_type = source.get("type")
 
         if vol_type == "pvc":
-            result.append(_convert_pvc_mount(source["claim"], mount_path, pvc_names, config, warnings))
+            result.append(_convert_pvc_mount(source["claim"], mount_path, pvc_names, config,
+                                             warnings, legacy_claim=source.get("legacy_claim")))
         elif vol_type == "emptydir":
             result.append(mount_path)
         elif vol_type == "configmap" and configmaps is not None:
@@ -209,6 +230,32 @@ def convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: set
             result.append(_convert_data_mount(sec_dir, vm))
 
     return result
+
+
+def _warn_legacy_vct_mappings(manifests: dict, config: dict, warnings: list[str]) -> None:
+    """Warn about VCT PVCs still resolved through a bare-name dekube.yaml mapping."""
+    volumes_cfg = config.get("volumes") or {}
+    exclude = config.get("exclude") or []
+    by_legacy: dict[str, list[str]] = {}
+    for m in manifests.get("StatefulSet") or []:
+        if not m:
+            continue
+        sts = (m.get("metadata") or {}).get("name", "")
+        if not sts or is_excluded(sts, exclude):
+            continue
+        for vct in (m.get("spec") or {}).get("volumeClaimTemplates") or []:
+            vname = ((vct or {}).get("metadata") or {}).get("name", "")
+            claim = f"{vname}-{sts}"
+            if vname and claim not in volumes_cfg and vname in volumes_cfg:
+                by_legacy.setdefault(vname, []).append(claim)
+    for vname, claims in sorted(by_legacy.items()):
+        for claim in claims:
+            warnings.append(f"PVC '{claim}': using legacy mapping '{vname}' — "
+                            f"rename it to '{claim}' in dekube.yaml")
+        if len(claims) > 1:
+            warnings.append(f"PVC collision: {', '.join(claims)} share legacy mapping "
+                            f"'{vname}' (same data directory) — give each its own "
+                            f"entry in dekube.yaml")
 
 
 # Backward compat alias (deprecated)
