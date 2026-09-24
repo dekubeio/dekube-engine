@@ -41,11 +41,11 @@ def _build_vol_map(pod_volumes: list,
         elif "configMap" in v:
             cm = v["configMap"] or {}
             vol_map[vname] = {"type": "configmap", "name": cm.get("name", ""),
-                              "items": cm.get("items")}
+                              "items": cm.get("items"), "default_mode": cm.get("defaultMode")}
         elif "secret" in v:
             sec = v["secret"] or {}
             vol_map[vname] = {"type": "secret", "name": sec.get("secretName", ""),
-                              "items": sec.get("items")}
+                              "items": sec.get("items"), "default_mode": sec.get("defaultMode")}
         elif "emptyDir" in v:
             vol_map[vname] = {"type": "emptydir"}
         else:
@@ -80,27 +80,49 @@ def _convert_pvc_mount(claim: str, mount_path: str, pvc_names: set,
     return f"{claim}:{mount_path}"
 
 
-def _resolve_data_keys(available_keys: list, items: list | None) -> list[tuple[str, str]]:
-    """Return (source_key, output_filename) pairs for a ConfigMap/Secret volume.
+# K8s mode for configMap/secret volume files without defaultMode/items[].mode
+# (ConfigMapVolumeSourceDefaultMode / SecretVolumeSourceDefaultMode)
+_DEFAULT_FILE_MODE = 0o644
+
+
+def _file_mode(mode, fallback: int) -> int:
+    """A K8s ``mode``/``defaultMode`` value, or ``fallback`` when unset/invalid."""
+    return mode if isinstance(mode, int) and not isinstance(mode, bool) else fallback
+
+
+def _host_mode(mode: int) -> int:
+    """Mode applied to a generated file on the host."""
+    # CBA: read bits are forced on for group/other. The files are bind-mounted owned
+    # by the host user (not root/fsGroup as in K8s), so an exact 0400/0600 would make
+    # them unreadable to a container running as any other uid. Exec bits follow K8s.
+    # Upgrade path: exact modes once something chowns these files to the container uid.
+    return (mode & 0o777) | 0o444
+
+
+def _resolve_data_keys(available_keys: list, items: list | None,
+                       default_mode=None) -> list[tuple[str, str, int]]:
+    """Return (source_key, output_filename, mode) triples for a ConfigMap/Secret volume.
 
     Without ``items``, every available key is written under its own name. With
     ``items``, only the listed keys are written (K8s key-filtering), each
-    optionally renamed to its ``path``.
+    optionally renamed to its ``path``. ``items[].mode`` overrides ``defaultMode``
+    (K8s default 0644).
     """
+    base_mode = _file_mode(default_mode, _DEFAULT_FILE_MODE)
     if items:
-        pairs = []
+        triples = []
         for item in items:
             if not item:
                 continue
             key = item.get("key")
             if not key:
                 continue
-            pairs.append((key, item.get("path") or key))
-        return pairs
-    return [(k, k) for k in available_keys]
+            triples.append((key, item.get("path") or key, _file_mode(item.get("mode"), base_mode)))
+        return triples
+    return [(k, k, base_mode) for k in available_keys]
 
 
-def _data_dir_name(name: str, items: list | None) -> str:
+def _data_dir_name(name: str, items: list | None, default_mode=None) -> str:
     """Directory name for a generated ConfigMap/Secret tree.
 
     Without ``items``: ``<name>`` (shared by every such mount). With ``items``:
@@ -109,8 +131,21 @@ def _data_dir_name(name: str, items: list | None) -> str:
     """
     if not items:
         return name
-    digest = hashlib.sha256(json.dumps(items, sort_keys=True, default=str).encode()).hexdigest()
+    digest = hashlib.sha256(json.dumps([items, default_mode], sort_keys=True,
+                                       default=str).encode()).hexdigest()
     return f"{name}_{digest[:8]}"
+
+
+def _warn_mode_conflict(abs_dir: str, keys: list, label: str, warnings: list[str]) -> None:
+    """Warn when a reused tree lacks exec bits this mount's modes ask for."""
+    # CBA: the no-items tree is shared by every mount of the object (its path is kept
+    # stable), so the first mount's modes win. Upgrade path: key it by defaultMode too.
+    for _key, out_name, mode in keys:
+        path = os.path.join(abs_dir, out_name)
+        if os.path.isfile(path) and mode & 0o111 & ~os.stat(path).st_mode:
+            warnings.append(f"{label} is mounted with different defaultMode values — "
+                            f"'{out_name}' keeps the first mount's mode (not executable)")
+            return
 
 
 def _generate_configmap_files(cm_name: str, cm_data: dict, output_dir: str,
@@ -118,19 +153,24 @@ def _generate_configmap_files(cm_name: str, cm_data: dict, output_dir: str,
                               replacements: list[dict] | None = None,
                               service_port_map: dict | None = None,
                               binary_data: dict | None = None,
-                              items: list | None = None) -> str:
+                              items: list | None = None,
+                              default_mode=None) -> str:
     """Write ConfigMap data/binaryData entries as files. Returns the directory path (relative).
 
-    Honours volume ``items`` (key filtering + key→path rename), matching Secret behaviour.
+    Honours volume ``items`` (key filtering + key→path rename) and file modes,
+    matching Secret behaviour.
     """
-    dir_name = _data_dir_name(cm_name, items)
+    dir_name = _data_dir_name(cm_name, items, default_mode)
     rel_dir = os.path.join("configmaps", dir_name)
     abs_dir = os.path.join(output_dir, rel_dir)
-    if dir_name not in generated_cms:
+    binary_data = binary_data or {}
+    keys = _resolve_data_keys(list(cm_data) + list(binary_data), items, default_mode)
+    if dir_name in generated_cms:
+        _warn_mode_conflict(abs_dir, keys, f"ConfigMap '{cm_name}'", warnings)
+    else:
         generated_cms.add(dir_name)
         os.makedirs(abs_dir, exist_ok=True)
-        binary_data = binary_data or {}
-        for key, out_name in _resolve_data_keys(list(cm_data) + list(binary_data), items):
+        for key, out_name, mode in keys:
             file_path = os.path.join(abs_dir, out_name)
             if not os.path.realpath(file_path).startswith(os.path.realpath(output_dir) + os.sep):
                 warnings.append(f"ConfigMap '{cm_name}' key '{out_name}' would escape output directory — skipped")
@@ -150,31 +190,38 @@ def _generate_configmap_files(cm_name: str, cm_data: dict, output_dir: str,
                     f.write(base64.b64decode(binary_data[key]))
             else:
                 warnings.append(f"ConfigMap '{cm_name}' item key '{key}' not found in data/binaryData — skipped")
+                continue
+            os.chmod(file_path, _host_mode(mode))
     return f"./{rel_dir}"
 
 
-def _resolve_secret_keys(secret: dict, items: list | None) -> list[tuple[str, str]]:
-    """Return (key, output_filename) pairs for a Secret volume mount."""
+def _resolve_secret_keys(secret: dict, items: list | None,
+                         default_mode=None) -> list[tuple[str, str, int]]:
+    """Return (key, output_filename, mode) triples for a Secret volume mount."""
     available = list((secret.get("data") or {})) + list((secret.get("stringData") or {}))
-    return _resolve_data_keys(available, items)
+    return _resolve_data_keys(list(dict.fromkeys(available)), items, default_mode)
 
 
 def _generate_secret_files(sec_name: str, secret: dict, items: list | None,
                            output_dir: str, generated_secrets: set,
                            warnings: list[str],
-                           replacements: list[dict] | None = None) -> str:
+                           replacements: list[dict] | None = None,
+                           default_mode=None) -> str:
     """Write Secret data entries as files. Returns the directory path (relative).
 
     Files hold the decoded bytes, as kubelet mounts them; replacements only
     apply to values that are UTF-8 text.
     """
-    dir_name = _data_dir_name(sec_name, items)
+    dir_name = _data_dir_name(sec_name, items, default_mode)
     rel_dir = os.path.join("secrets", dir_name)
     abs_dir = os.path.join(output_dir, rel_dir)
-    if dir_name not in generated_secrets:
+    keys = _resolve_secret_keys(secret, items, default_mode)
+    if dir_name in generated_secrets:
+        _warn_mode_conflict(abs_dir, keys, f"Secret '{sec_name}'", warnings)
+    else:
         generated_secrets.add(dir_name)
         os.makedirs(abs_dir, exist_ok=True)
-        for key, out_name in _resolve_secret_keys(secret, items):
+        for key, out_name, mode in keys:
             raw = _secret_bytes(secret, key)
             if raw is None:
                 warnings.append(f"Secret '{sec_name}' key '{key}' could not be decoded — skipped")
@@ -197,6 +244,7 @@ def _generate_secret_files(sec_name: str, secret: dict, items: list | None,
             else:
                 with open(out_path, "w", encoding="utf-8") as f:
                     f.write(val)
+            os.chmod(out_path, _host_mode(mode))
     return f"./{rel_dir}"
 
 
@@ -246,7 +294,8 @@ def convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: set
                                                replacements=replacements,
                                                service_port_map=service_port_map,
                                                binary_data=cm.get("binaryData") or {},
-                                               items=source.get("items"))
+                                               items=source.get("items"),
+                                               default_mode=source.get("default_mode"))
             result.append(_convert_data_mount(cm_dir, vm))
         elif vol_type == "secret" and secrets is not None:
             sec = secrets.get(source["name"])
@@ -255,7 +304,8 @@ def convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: set
                 continue
             sec_dir = _generate_secret_files(source["name"], sec, source.get("items"),
                                              output_dir, generated_secrets, warnings,
-                                             replacements=replacements)
+                                             replacements=replacements,
+                                             default_mode=source.get("default_mode"))
             result.append(_convert_data_mount(sec_dir, vm))
 
     return result
