@@ -121,7 +121,11 @@ def _load_extensions(extensions_dir):
 
 
 def _override_rewriters(extra_rewriters, rewriters):
-    """Override built-in rewriters with external ones sharing the same name."""
+    """Override built-in rewriters with external ones sharing the same name.
+
+    Then one ordering by priority for built-in + external (stable sort:
+    on equal priority, external rewriters stay ahead of built-in ones).
+    """
     if not extra_rewriters:
         return
     ext_names = {rw.name for rw in extra_rewriters}
@@ -131,6 +135,7 @@ def _override_rewriters(extra_rewriters, rewriters):
         for name in sorted(overridden):
             print(f"Rewriter overrides built-in: {name}", file=sys.stderr)
     rewriters[0:0] = extra_rewriters
+    rewriters.sort(key=lambda r: getattr(r, 'priority', 1000))
 
 
 def _check_duplicate_kinds(extra_converters):
