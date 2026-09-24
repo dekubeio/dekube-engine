@@ -141,7 +141,7 @@ def _resolve_envfrom(envfrom_list: list, configmaps: dict, secrets: dict,
     for ef in envfrom_list:
         if not ef:  # null list item (Helm conditional inside envFrom)
             continue
-        prefix = ef.get("prefix", "")
+        prefix = ef.get("prefix") or ""
         if "configMapRef" in ef:
             cm = configmaps.get((ef["configMapRef"] or {}).get("name", ""), {})
             for k, v in (cm.get("data") or {}).items():
