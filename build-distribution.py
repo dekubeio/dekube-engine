@@ -197,72 +197,59 @@ def discover_extensions(extensions_dir: Path) -> list[Path]:
     return py_files
 
 
-def _find_bare_calls(tree: ast.AST, func_name: str) -> bool:
-    """Check if a function is called as a bare name (not self.func or cls.func)."""
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            if node.func.id == func_name:
-                return True
-    return False
+def _top_level_defs(text: str) -> dict[str, str]:
+    """Map each top-level function, class and assigned name to its ast.dump.
 
-
-def check_function_shadowing(ext_files: list[Path], allow: bool = False) -> None:
-    """Detect top-level function name collisions between extensions.
-
-    Extensions are concatenated into a single namespace — if two define
-    the same top-level function, the second silently overwrites the first.
-
-    Two severity levels:
-    - Shadowed + called as bare name → fatal (will break at runtime)
-    - Shadowed but only called via self → warning (safe in practice)
+    Within one source the last binding wins, as it does at runtime.
+    CBA: only plain def/class/assignment statements are seen — names bound by
+    imports or inside top-level if/try blocks are not; walk those too if one bites.
     """
-    func_owners: dict[str, list[str]] = {}
-    ext_trees: dict[str, ast.AST] = {}
-    for ext_path in ext_files:
-        try:
-            tree = ast.parse(ext_path.read_text())
-        except SyntaxError:
-            continue
-        ext_trees[ext_path.stem] = tree
-        for node in ast.iter_child_nodes(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                func_owners.setdefault(node.name, []).append(ext_path.stem)
-
-    shadows = {name: owners for name, owners in func_owners.items() if len(owners) > 1}
-    if not shadows:
-        return
-
-    # Check which shadowed functions are called as bare names
-    dangerous = {}
-    safe = {}
-    for name, owners in shadows.items():
-        bare_callers = [ext for ext in owners if _find_bare_calls(ext_trees[ext], name)]
-        if bare_callers:
-            dangerous[name] = (owners, bare_callers)
+    defs: dict[str, str] = {}
+    for node in ast.iter_child_nodes(ast.parse(text)):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names = [node.name]
+        elif isinstance(node, ast.Assign):
+            names = [n.id for t in node.targets for n in ast.walk(t)
+                     if isinstance(n, ast.Name)]
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)) and isinstance(node.target, ast.Name):
+            names = [node.target.id]
         else:
-            safe[name] = owners
+            continue
+        for name in names:
+            defs[name] = ast.dump(node)
+    return defs
 
-    if safe:
-        print("\nFunction shadowing detected (safe — all calls use self):",
-              file=sys.stderr)
-        for name, owners in sorted(safe.items()):
-            print(f"  {name}() defined by: {', '.join(owners)}", file=sys.stderr)
-        print("  Consider moving these into the class to keep things clean.\n",
-              file=sys.stderr)
 
-    if not dangerous:
+def check_shadowing(sources: list[tuple[str, str]], allow: bool = False) -> None:
+    """Detect top-level name collisions across engine modules and extensions.
+
+    Everything is concatenated into a single namespace — if two sources bind
+    the same top-level name (function, class or assignment), the last one
+    silently overwrites the others, engine included (an extension's `def log()`
+    or `def main()` replaces the engine's). Identical definitions (same
+    ast.dump) are harmless and allowed; any differing collision fails the build.
+
+    *sources* is a list of (owner label, source text).
+    """
+    owners: dict[str, dict[str, list[str]]] = {}  # name -> dump -> owner labels
+    for label, text in sources:
+        for name, dump in _top_level_defs(text).items():
+            owners.setdefault(name, {}).setdefault(dump, []).append(label)
+
+    collisions = {name: dumps for name, dumps in owners.items() if len(dumps) > 1}
+    if not collisions:
         return
 
-    print("\nFunction shadowing detected (DANGEROUS — bare calls found):",
+    print("\nTop-level name collision detected (differing definitions):",
           file=sys.stderr)
-    for name, (owners, callers) in sorted(dangerous.items()):
-        print(f"  {name}() defined by: {', '.join(owners)}"
-              f" — called as bare {name}() in: {', '.join(callers)}",
-              file=sys.stderr)
+    for name, dumps in sorted(collisions.items()):
+        labels = [label for dump_owners in dumps.values() for label in dump_owners]
+        print(f"  {name} defined by: {', '.join(labels)}", file=sys.stderr)
     print(
         "\nWhen concatenated into a distribution, the last definition wins "
-        "and earlier ones are silently overwritten. Move helpers into your "
-        "extension class (self._helper() or @staticmethod) to avoid collisions.",
+        "and earlier ones are silently overwritten — the engine's included. "
+        "Move helpers and constants into your extension class "
+        "(self._helper(), @staticmethod, class attributes) to avoid collisions.",
         file=sys.stderr,
     )
 
@@ -273,7 +260,7 @@ def check_function_shadowing(ext_files: list[Path], allow: bool = False) -> None
         print(
             "\nRefusing to build. Fix your extensions (move helpers into the class), "
             "or pass --my-extensions-are-fine-i-swear if you want a distribution "
-            "where functions silently eat each other.\n",
+            "where definitions silently eat each other.\n",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -349,7 +336,7 @@ def main():
     parser.add_argument("--base-version", default="latest",
                         help="Distribution version to fetch (default: latest)")
     parser.add_argument("--my-extensions-are-fine-i-swear", action="store_true",
-                        help="Build anyway despite top-level function collisions between extensions. They are not fine.")
+                        help="Build anyway despite top-level name collisions (engine or extensions). They are not fine.")
     args = parser.parse_args()
 
     output = Path(args.name + ".py")
@@ -359,6 +346,8 @@ def main():
     if args.core_dir:
         print(f"Local dev mode: reading core from {args.core_dir}", file=sys.stderr)
         all_imports, all_bodies = build_core_body_from_local(args.core_dir)
+        src_dir = args.core_dir / "src" / "dekube"
+        base_sources = [(f"engine:{m}", (src_dir / m).read_text()) for m in CORE_MODULES]
     elif args.base:
         print(f"Local base mode: reading from {args.base}", file=sys.stderr)
         all_imports, all_bodies = build_base_body_from_file(args.base)
@@ -367,6 +356,9 @@ def main():
               file=sys.stderr)
         all_imports, all_bodies = build_base_body_from_release(
             args.base_distribution, args.base_version)
+    if not args.core_dir:
+        # A pre-built base is one source: its own internals were checked when it was built
+        base_sources = [(f"base:{args.base or args.base_distribution}", "".join(all_bodies))]
 
     # Step 2: Concat extension .py files
     if not args.extensions_dir.is_dir():
@@ -374,7 +366,8 @@ def main():
         sys.exit(1)
 
     ext_files = discover_extensions(args.extensions_dir)
-    check_function_shadowing(ext_files, allow=args.my_extensions_are_fine_i_swear)
+    check_shadowing(base_sources + [(f"ext:{p.stem}", p.read_text()) for p in ext_files],
+                    allow=args.my_extensions_are_fine_i_swear)
     for ext_path in ext_files:
         imports, body = collect_imports_and_body(ext_path)
         for imp in imports:
