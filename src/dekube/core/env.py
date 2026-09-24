@@ -163,31 +163,34 @@ def _resolve_envfrom(envfrom_list: list, configmaps: dict, secrets: dict,
     return env_vars
 
 
-# Bumped each time resolve_env rewrites values (port remap + replacements), so
-# convert() can keep _postprocess_env off the services of providers that used it:
-# neither transform is idempotent (chained remaps, a "new" containing its "old").
-_ENV_REWRITES = [0]
+# Bumped by resolve_env per transform it applies ("remap": service_port_map passed,
+# "replace": replacements passed), so convert() can keep _postprocess_env from
+# re-applying it: neither is idempotent (chained remaps, a "new" containing its "old").
+_ENV_REWRITES = {"remap": 0, "replace": 0}
 
 
-def _postprocess_env(services: dict, ctx) -> None:
+def _postprocess_env(services: dict, ctx, skip_remap=(), skip_replace=()) -> None:
     """Apply port remapping and replacements to services' env.
 
     Providers that build services from scratch may not apply port remapping or
     user-defined replacements to their env vars. This pass catches them.
-    NOT idempotent: pass only services whose env hasn't been rewritten yet.
+    NOT idempotent: services named in ``skip_remap`` / ``skip_replace`` already
+    had that transform applied (by resolve_env) and don't get it again.
     """
-    for _svc_name, svc in services.items():
+    for svc_name, svc in services.items():
         env = svc.get("environment")
         if not env or not isinstance(env, dict):
             continue
+        remap = ctx.service_port_map and svc_name not in skip_remap
+        replace = ctx.replacements and svc_name not in skip_replace
         for key in list(env):
             val = env[key]
             if not isinstance(val, str):
                 continue
             original = val
-            if ctx.service_port_map:
+            if remap:
                 val = _apply_port_remap(val, ctx.service_port_map)
-            if ctx.replacements:
+            if replace:
                 val = apply_replacements(val, ctx.replacements)
             if val != original:
                 env[key] = val
@@ -256,8 +259,10 @@ def resolve_env(container: dict, configmaps: dict[str, dict], secrets: dict[str,
             by_name[ev["name"]] = ev
 
     env_vars = list(by_name.values())
-    if replacements is not None or service_port_map is not None:
-        _ENV_REWRITES[0] += 1
+    if service_port_map is not None:
+        _ENV_REWRITES["remap"] += 1
+    if replacements is not None:
+        _ENV_REWRITES["replace"] += 1
     _rewrite_env_values(env_vars, replacements=replacements,
                         service_port_map=service_port_map)
     return env_vars
