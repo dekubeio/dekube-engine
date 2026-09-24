@@ -55,11 +55,15 @@ def _load_module(filepath):
     added = parent not in sys.path
     if added:
         sys.path.insert(0, parent)
+    module = importlib.util.module_from_spec(spec)
+    # Registered before exec, like a regular import: @dataclass (with
+    # `from __future__ import annotations`) resolves the module via sys.modules.
+    sys.modules[mod_name] = module
     try:
-        module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
     except Exception as exc:  # pylint: disable=broad-except
+        sys.modules.pop(mod_name, None)
         print(f"Warning: failed to load {filepath}: {exc}", file=sys.stderr)
         return None
     finally:
