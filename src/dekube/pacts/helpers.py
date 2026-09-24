@@ -110,12 +110,13 @@ def iter_named_containers(name: str, pod_spec: dict) -> Iterator[tuple[str, dict
 def apply_alias_map(text: str, alias_map: dict[str, str]) -> str:
     """Replace K8s Service names with compose service names in hostname positions.
 
-    Matches aliases preceded by / or @ (URLs, Redis URIs) and followed by
-    / : whitespace, quotes, or end-of-string — so only hostnames are affected,
-    not substrings like bucket names.
+    Matches aliases preceded by // (URL authority) or @ (userinfo, Redis URIs)
+    and followed by / : whitespace, quotes, or end-of-string — so only hostnames
+    are affected, not path segments (``http://gw/<alias>/v1``) or substrings
+    like bucket names.
     """
     for alias, target in (alias_map or {}).items():
-        text = re.sub(r'(?<=[/@])' + re.escape(alias) + r'''(?=[/:\s"']|$)''', target, text)
+        text = re.sub(r'(?:(?<=//)|(?<=@))' + re.escape(alias) + r'''(?=[/:\s"']|$)''', target, text)
     return text
 
 
