@@ -1,6 +1,8 @@
 """Volume mount conversion — PVC, ConfigMap, Secret, emptyDir."""
 
 import base64
+import hashlib
+import json
 import os
 
 from dekube.pacts.helpers import apply_replacements, is_excluded, _secret_bytes
@@ -98,6 +100,19 @@ def _resolve_data_keys(available_keys: list, items: list | None) -> list[tuple[s
     return [(k, k) for k in available_keys]
 
 
+def _data_dir_name(name: str, items: list | None) -> str:
+    """Directory name for a generated ConfigMap/Secret tree.
+
+    Without ``items``: ``<name>`` (shared by every such mount). With ``items``:
+    ``<name>_<hash>`` so mounts filtering different keys don't share one tree
+    ('_' can't appear in a K8s name, so this never collides with a real one).
+    """
+    if not items:
+        return name
+    digest = hashlib.sha256(json.dumps(items, sort_keys=True, default=str).encode()).hexdigest()
+    return f"{name}_{digest[:8]}"
+
+
 def _generate_configmap_files(cm_name: str, cm_data: dict, output_dir: str,
                               generated_cms: set, warnings: list[str],
                               replacements: list[dict] | None = None,
@@ -108,10 +123,11 @@ def _generate_configmap_files(cm_name: str, cm_data: dict, output_dir: str,
 
     Honours volume ``items`` (key filtering + key→path rename), matching Secret behaviour.
     """
-    rel_dir = os.path.join("configmaps", cm_name)
+    dir_name = _data_dir_name(cm_name, items)
+    rel_dir = os.path.join("configmaps", dir_name)
     abs_dir = os.path.join(output_dir, rel_dir)
-    if cm_name not in generated_cms:
-        generated_cms.add(cm_name)
+    if dir_name not in generated_cms:
+        generated_cms.add(dir_name)
         os.makedirs(abs_dir, exist_ok=True)
         binary_data = binary_data or {}
         for key, out_name in _resolve_data_keys(list(cm_data) + list(binary_data), items):
@@ -152,10 +168,11 @@ def _generate_secret_files(sec_name: str, secret: dict, items: list | None,
     Files hold the decoded bytes, as kubelet mounts them; replacements only
     apply to values that are UTF-8 text.
     """
-    rel_dir = os.path.join("secrets", sec_name)
+    dir_name = _data_dir_name(sec_name, items)
+    rel_dir = os.path.join("secrets", dir_name)
     abs_dir = os.path.join(output_dir, rel_dir)
-    if sec_name not in generated_secrets:
-        generated_secrets.add(sec_name)
+    if dir_name not in generated_secrets:
+        generated_secrets.add(dir_name)
         os.makedirs(abs_dir, exist_ok=True)
         for key, out_name in _resolve_secret_keys(secret, items):
             raw = _secret_bytes(secret, key)

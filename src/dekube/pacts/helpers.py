@@ -127,7 +127,8 @@ def rewrite_k8s_dns(text: str) -> str:
 def write_configmap_files(name: str, ctx, items: list | None = None) -> str | None:
     """Emit a ConfigMap's data as files under output_dir/configmaps/<name>/.
 
-    Returns the relative dir (``./configmaps/<name>``) or None (+ ctx.warnings) if absent.
+    Returns the relative dir (``./configmaps/<name>``, or ``./configmaps/<name>_<hash>``
+    when ``items`` is given) or None (+ ctx.warnings) if absent.
     """
     # deferred import breaks the pacts.helpers↔core.volumes cycle at runtime; the
     # graph-level warnings pylint still raises for it are therefore intentional.
@@ -145,7 +146,8 @@ def write_configmap_files(name: str, ctx, items: list | None = None) -> str | No
 def write_secret_files(name: str, ctx, items: list | None = None) -> str | None:
     """Emit a Secret's data as files under output_dir/secrets/<name>/.
 
-    Returns the relative dir (``./secrets/<name>``) or None (+ ctx.warnings) if absent.
+    Returns the relative dir (``./secrets/<name>``, or ``./secrets/<name>_<hash>``
+    when ``items`` is given) or None (+ ctx.warnings) if absent.
     """
     # deferred import breaks the pacts.helpers↔core.volumes cycle at runtime; the
     # graph-level warnings pylint still raises for it are therefore intentional.
