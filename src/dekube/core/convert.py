@@ -79,8 +79,10 @@ def _resolve_secret_refs(obj, secrets: dict, warnings: list[str], escape: bool =
 def _apply_overrides(compose_services: dict, config: dict,
                      secrets: dict, warnings: list[str]) -> None:
     """Apply service overrides and custom services from config."""
-    volume_root = config.get("volume_root", "./data")
-    for svc_name, overrides in config.get("overrides", {}).items():
+    volume_root = config.get("volume_root") or "./data"
+    for svc_name, overrides in (config.get("overrides") or {}).items():
+        if not overrides:
+            continue  # `overrides: {x: }` — nothing to merge, same as absent
         if svc_name not in compose_services:
             warnings.append(f"override for '{svc_name}' but no such generated service — skipped")
             continue
@@ -88,6 +90,8 @@ def _apply_overrides(compose_services: dict, config: dict,
         resolved = _resolve_volume_root(resolved, volume_root)
         _deep_merge(compose_services[svc_name], resolved)
     for svc_name, svc_def in (config.get("services") or {}).items():
+        if svc_def is None:
+            continue  # `services: {x: }` — no definition, same as absent
         if svc_name in compose_services:
             warnings.append(f"custom service '{svc_name}' conflicts with generated service — overwritten")
         resolved = _resolve_secret_refs(svc_def, secrets, warnings)

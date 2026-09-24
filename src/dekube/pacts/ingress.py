@@ -37,12 +37,12 @@ def get_ingress_class(manifest: dict,
     canonical rewriter names (e.g. ``haproxy-internal`` → ``haproxy``).
     """
     spec = manifest.get("spec") or {}
-    cls = spec.get("ingressClassName", "")
+    cls = spec.get("ingressClassName") or ""
     if not cls:
         cls = ((manifest.get("metadata") or {}).get("annotations") or {}).get(
-            "kubernetes.io/ingress.class", "")
+            "kubernetes.io/ingress.class") or ""
     cls = cls.lower()
-    if ingress_types and cls in ingress_types:
+    if (ingress_types or {}).get(cls):
         cls = ingress_types[cls].lower()
     return cls
 

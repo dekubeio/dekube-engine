@@ -57,7 +57,8 @@ def load_config(path: str) -> dict:
     if _migrate_config(cfg):
         print("Config migrated to v3.1 key names in memory", file=sys.stderr)
 
-    cfg.setdefault("volume_root", "./data")
+    if not cfg.get("volume_root"):  # absent, or `volume_root:` left empty
+        cfg["volume_root"] = "./data"
     if not isinstance(cfg.get("volumes"), dict):
         cfg["volumes"] = {}
     if not isinstance(cfg.get("exclude"), list):

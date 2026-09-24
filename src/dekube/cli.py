@@ -21,7 +21,7 @@ def _init_first_run(config: dict, manifests: dict, args) -> None:
     config["name"] = os.path.basename(os.path.realpath(source_dir))
     for kind in WORKLOAD_KINDS:
         for m in manifests.get(kind, []):
-            name = m.get("metadata", {}).get("name", "")
+            name = (m.get("metadata") or {}).get("name") or ""
             if any(p in name for p in AUTO_EXCLUDE_PATTERNS):
                 if name not in config["exclude"]:
                     config["exclude"].append(name)
