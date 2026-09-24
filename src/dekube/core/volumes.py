@@ -95,8 +95,20 @@ def _convert_pvc_mount(claim: str, mount_path: str, pvc_names: set,
             # other subPaths already exist trips it too (mkdir the subdir to opt in).
             # A genuine first run has no data dir yet, so it gets the subPath mount.
             root = os.path.join(output_dir, resolved)
-            sub_dir = os.path.join(root, sub_path)
-            if not os.path.exists(sub_dir) and os.path.isdir(root) and os.listdir(root):
+            try:
+                try:
+                    os.stat(os.path.join(root, sub_path))
+                    legacy = False
+                except FileNotFoundError:
+                    legacy = os.path.isdir(root) and bool(os.listdir(root))
+            except OSError as exc:
+                # e.g. a 0700 PGDATA owned by the container uid: can't tell, keep the data visible
+                _warn_once(warnings, f"PVC '{claim}': cannot inspect {resolved} ({exc.strerror}) — "
+                                     f"keeping the whole-volume mount; if the data is already in "
+                                     f"{resolved.rstrip('/')}/{sub_path}, make {resolved} readable "
+                                     f"by you to switch to subPath")
+                return f"{resolved}:{mount_path}"
+            if legacy:
                 _warn_once(warnings, f"PVC '{claim}': data found at {resolved} but subPath '{sub_path}' "
                                      f"is not there — keeping the old mount of the whole volume; move "
                                      f"the data into {resolved.rstrip('/')}/{sub_path} to use subPath")
