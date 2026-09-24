@@ -243,10 +243,15 @@ def _truncate_hostnames(compose_services: dict, warnings: list[str]) -> None:
     """Set explicit shorter hostname for services >63 chars (Linux hostname limit).
 
     Strips trailing '-' (a hostname may not end in a dash — Docker refuses
-    sethostname) and warns when two truncated names collide.
+    sethostname) and warns when two truncated names collide. Skips services
+    joining another container's network namespace (network_mode container:/
+    service:, e.g. sidecars): they share its UTS namespace and Docker refuses
+    a hostname there ("conflicting options: hostname and the network mode").
     """
     seen: dict[str, str] = {}
     for svc_name, svc in compose_services.items():
+        if str(svc.get("network_mode") or "").startswith(("container:", "service:")):
+            continue
         if len(svc_name) > 63 and "hostname" not in svc:
             truncated = svc_name[:63].rstrip("-")
             if truncated in seen:
