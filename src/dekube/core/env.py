@@ -13,34 +13,29 @@ def _apply_port_remap(text: str, service_port_map: dict) -> str:
     Compose has no service layer, so URLs must use the actual container port.
     """
     # Group by service name, skip identity mappings and named ports
-    remaps: dict[str, list[tuple[int, int]]] = {}
+    remaps: dict[str, dict[int, int]] = {}
     for (svc_name, svc_port), container_port in service_port_map.items():
         if not isinstance(svc_port, int) or container_port is None or svc_port == container_port:
             continue
-        remaps.setdefault(svc_name, []).append((svc_port, container_port))
+        remaps.setdefault(svc_name, {})[svc_port] = container_port
 
-    for svc_name, port_pairs in remaps.items():
-        escaped = re.escape(svc_name)
-        for svc_port, container_port in port_pairs:
-            # Explicit port: ://host:svc_port or @host:svc_port
-            text = re.sub(
-                r'(?<=[/@])' + escaped + ':' + str(svc_port) + _URL_BOUNDARY,
-                f'{svc_name}:{container_port}',
-                text,
-            )
-            # Implicit port: http://host (80) or https://host (443)
-            if svc_port == 80:
-                text = re.sub(
-                    r'(http://)' + escaped + _URL_BOUNDARY,
-                    r'\g<1>' + f'{svc_name}:{container_port}',
-                    text,
-                )
-            elif svc_port == 443:
-                text = re.sub(
-                    r'(https://)' + escaped + _URL_BOUNDARY,
-                    r'\g<1>' + f'{svc_name}:{container_port}',
-                    text,
-                )
+    for svc_name, ports in remaps.items():
+        def _remap(m, svc_name=svc_name, ports=ports):
+            """Remap one host[:port] occurrence (implicit port from http:// / https://)."""
+            if m.group(1):
+                target = ports.get(int(m.group(1)))
+            elif m.string.endswith("http://", 0, m.start()):
+                target = ports.get(80)
+            elif m.string.endswith("https://", 0, m.start()):
+                target = ports.get(443)
+            else:
+                target = None
+            return m.group(0) if target is None else f"{svc_name}:{target}"
+        # One pass per service: each occurrence is remapped at most once, so
+        # 80→8080 plus 8080→9090 doesn't chain :80 into :9090.
+        # Explicit port: ://host:svc_port or @host:svc_port; implicit: http://host, https://host
+        text = re.sub(r'(?<=[/@])' + re.escape(svc_name) + r'(?::(\d+))?' + _URL_BOUNDARY,
+                      _remap, text)
 
     return text
 
