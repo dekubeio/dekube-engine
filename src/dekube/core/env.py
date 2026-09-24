@@ -50,9 +50,11 @@ def _resolve_k8s_var_refs(obj, env_dict: dict[str, str]):
 
     Kubelet resolves $(VAR) in command/args from the container's env vars.
     Compose doesn't do this, so we inline the values at generation time.
+    Unknown refs stay verbatim; "$$" collapses to "$", as kubelet does.
     """
     if isinstance(obj, str):
-        return _K8S_VAR_REF_RE.sub(lambda m: env_dict.get(m.group(1), m.group(0)), obj)
+        return _K8S_VAR_REF_RE.sub(
+            lambda m: "$" if m.group(1) is None else env_dict.get(m.group(1), m.group(0)), obj)
     if isinstance(obj, list):
         return [_resolve_k8s_var_refs(item, env_dict) for item in obj]
     return obj

@@ -41,8 +41,10 @@ IGNORED_KINDS = (
 # K8s kinds that produce compose services (iterated together everywhere)
 WORKLOAD_KINDS = ("DaemonSet", "Deployment", "Job", "Pod", "StatefulSet")
 
-# K8s $(VAR) interpolation in command/args (kubelet resolves these from env vars)
-_K8S_VAR_REF_RE = re.compile(r'\$\(([A-Za-z_][A-Za-z0-9_]*)\)')
+# K8s $(VAR) interpolation in command/args (kubelet resolves these from env vars).
+# Mirrors k8s third_party/forked/golang/expansion: "$$" is an escape for "$"
+# (so "$$(VAR)" is a literal "$(VAR)"), "$(...)" runs to the first ")".
+_K8S_VAR_REF_RE = re.compile(r'\$(?:\$|\(([^)]*)\))')
 
 # Regex boundary for URL port rewriting (matches end-of-string or path/whitespace/quote)
 _URL_BOUNDARY = r'''(?=[/\s"']|$)'''
