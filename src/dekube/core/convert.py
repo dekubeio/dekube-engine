@@ -48,8 +48,12 @@ def _resolve_volume_root(obj, volume_root: str):
     return obj
 
 
-def _resolve_secret_refs(obj, secrets: dict, warnings: list[str]):
-    """Recursively resolve $secret:<name>:<key> placeholders in config values."""
+def _resolve_secret_refs(obj, secrets: dict, warnings: list[str], escape: bool = True):
+    """Recursively resolve $secret:<name>:<key> placeholders in config values.
+
+    ``escape`` doubles $ in resolved values (compose text); pass False for data
+    that is escaped later (replacements feed env values and generated files).
+    """
     if isinstance(obj, str):
         def _replace(m):  # noqa: E301 — closure for re.sub callback
             """Resolve a single $secret:<name>:<key> match."""
@@ -63,12 +67,12 @@ def _resolve_secret_refs(obj, secrets: dict, warnings: list[str]):
                 warnings.append(f"$secret ref: key '{sec_key}' not found in Secret '{sec_name}'")
                 return m.group(0)
             # resolved into compose text — escape so compose doesn't interpolate it
-            return val.replace("$", "$$")
+            return val.replace("$", "$$") if escape else val
         return _SECRET_REF_RE.sub(_replace, obj)
     if isinstance(obj, list):
-        return [_resolve_secret_refs(item, secrets, warnings) for item in obj]
+        return [_resolve_secret_refs(item, secrets, warnings, escape) for item in obj]
     if isinstance(obj, dict):
-        return {k: _resolve_secret_refs(v, secrets, warnings) for k, v in obj.items()}
+        return {k: _resolve_secret_refs(v, secrets, warnings, escape) for k, v in obj.items()}
     return obj
 
 
@@ -118,6 +122,7 @@ def convert(manifests: dict[str, list[dict]], config: dict,
     extensions_config = config.get("extensions") or {}
     compose_services: dict = {}
     ingress_entries: list[dict] = []
+    raw_replacements = ctx.replacements
     for converter in sorted(_CONVERTERS, key=lambda c: getattr(c, 'priority', 1000)):
         ext_name = getattr(converter, 'name', '')
         ext_conf = extensions_config.get(ext_name) or {}
@@ -125,6 +130,11 @@ def convert(manifests: dict[str, list[dict]], config: dict,
             print(f"Extension disabled: {ext_name}", file=sys.stderr)
             continue
         ctx.extension_config = ext_conf
+        if isinstance(converter, Provider) and ctx.replacements is raw_replacements:
+            # $secret: refs need the indexed/generated secrets: resolve once, before the
+            # first provider consumes replacements (a copy — config is saved back to disk)
+            ctx.replacements = _resolve_secret_refs(raw_replacements, ctx.secrets, warnings,
+                                                    escape=False)
         for kind in converter.kinds:
             result = converter.convert(kind, manifests.get(kind, []), ctx)
             if result is None:
@@ -138,6 +148,10 @@ def convert(manifests: dict[str, list[dict]], config: dict,
 
     if not first_run:
         _warn_legacy_vct_mappings(manifests, config, warnings)
+
+    if ctx.replacements is raw_replacements:  # no provider ran
+        ctx.replacements = _resolve_secret_refs(raw_replacements, ctx.secrets, warnings,
+                                                escape=False)
 
     # Post-process all services: port remapping and replacements.
     # Idempotent — safe on services whose env vars were already rewritten by a provider.
