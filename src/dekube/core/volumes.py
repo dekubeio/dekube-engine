@@ -54,7 +54,10 @@ def _build_vol_map(pod_volumes: list,
 
 
 def _resolve_host_path(host_path: str, volume_root: str) -> str:
-    """Resolve host_path: bare names are prefixed with volume_root, explicit paths kept as-is."""
+    """Resolve host_path: a leading $volume_root expands to volume_root, bare names
+    are prefixed with it, explicit paths kept as-is."""
+    if host_path == "$volume_root" or host_path.startswith("$volume_root/"):
+        return volume_root + host_path[len("$volume_root"):]
     if host_path.startswith(("/", "./", "../")):
         return host_path
     return f"{volume_root}/{host_path}"
