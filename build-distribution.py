@@ -404,6 +404,10 @@ def main():
     # Step 6: Register as 'dekube' module so extensions can `from dekube import ...`
     # Must be the same module object (not a copy) so mutable state (_REWRITERS etc.) is shared
     lines.append('\n\nsys.modules.setdefault("dekube", sys.modules[__name__])\n')
+    # The flat file has no submodules: alias the public pacts package too, so
+    # `from dekube.pacts import ...` works in a distribution like in the package
+    for mod in ("dekube.pacts", "dekube.pacts.types", "dekube.pacts.helpers", "dekube.pacts.ingress"):
+        lines.append(f'sys.modules.setdefault("{mod}", sys.modules[__name__])\n')
     # Compat shim: extensions using `from h2c import ...` still work
     lines.append('sys.modules.setdefault("h2c", sys.modules[__name__])\n')
 

@@ -131,6 +131,10 @@ def main():
     # Register as 'dekube' module so extensions can `from dekube import ...`
     # even when this script runs as __main__ (avoids dual-module identity issues)
     lines.append("sys.modules.setdefault('dekube', sys.modules[__name__])\n")
+    # No submodules in the flat file: alias the public pacts package too,
+    # so `from dekube.pacts import ...` works as it does with the package
+    for mod in ("dekube.pacts", "dekube.pacts.types", "dekube.pacts.helpers", "dekube.pacts.ingress"):
+        lines.append(f"sys.modules.setdefault('{mod}', sys.modules[__name__])\n")
     # Compat shim: extensions using `from h2c import ...` still work
     lines.append("sys.modules.setdefault('h2c', sys.modules[__name__])\n")
     lines.append("\n")
