@@ -1,5 +1,7 @@
 """Ingress conversion — IngressProvider abstract class, rewriter dispatch."""
 
+import sys
+
 from dekube.pacts.types import ConvertContext, ProviderResult, Provider
 from dekube.pacts.ingress import IngressRewriter
 
@@ -40,11 +42,25 @@ class IngressProvider(Provider):
     priority = 900
 
     def convert(self, _kind: str, manifests: list[dict], ctx: ConvertContext) -> ProviderResult:
-        """Convert all Ingress manifests via rewriter dispatch."""
+        """Convert all Ingress manifests via rewriter dispatch.
+
+        Like every extension, a rewriter sees its own `extensions: {<name>: …}`
+        block as ctx.extension_config and is skipped when `enabled: false`.
+        """
+        own_config = ctx.extension_config
+        extensions_config = ctx.config.get("extensions") or {}
+        rewriters = []
+        for rw in _REWRITERS:
+            rw_conf = extensions_config.get(rw.name) or {}
+            if not rw_conf.get("enabled", True):
+                print(f"Rewriter disabled: {rw.name}", file=sys.stderr)
+                continue
+            rewriters.append((rw, rw_conf))
         entries = []
         for m in manifests:
-            rewriter = self._find_rewriter(m, ctx)
+            rewriter = self._find_rewriter(m, ctx, rewriters)
             entries.extend(rewriter.rewrite(m, ctx))
+        ctx.extension_config = own_config  # back to the provider's own, for build_service
         services = {}
         if entries and not ctx.config.get("disable_ingress"):
             services = self.build_service(entries, ctx)
@@ -58,9 +74,14 @@ class IngressProvider(Provider):
         """Write the reverse proxy config file. Override in subclasses."""
 
     @staticmethod
-    def _find_rewriter(manifest, ctx):
-        """Find the first matching rewriter for an Ingress manifest."""
-        for rw in _REWRITERS:
+    def _find_rewriter(manifest, ctx, rewriters):
+        """Find the first matching rewriter for an Ingress manifest.
+
+        *rewriters* is a list of (rewriter, its extension config); the
+        matching rewriter's config is left in ctx.extension_config.
+        """
+        for rw, rw_conf in rewriters:
+            ctx.extension_config = rw_conf
             if rw.match(manifest, ctx):
                 return rw
         name = (manifest.get("metadata") or {}).get("name", "?")

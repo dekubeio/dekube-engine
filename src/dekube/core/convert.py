@@ -185,6 +185,7 @@ def convert(manifests: dict[str, list[dict]], config: dict,
         if not ext_conf.get("enabled", True):
             print(f"Transform disabled: {ext_name}", file=sys.stderr)
             continue
+        ctx.extension_config = ext_conf
         transform_cls.transform(compose_services, ingress_entries, ctx)
 
     # Escape $ in generated env so compose doesn't interpolate secrets.
