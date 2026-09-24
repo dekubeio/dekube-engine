@@ -68,11 +68,12 @@ def _resolve_host_path(host_path: str, volume_root: str) -> str:
 def _convert_pvc_mount(claim: str, mount_path: str, pvc_names: set,
                        config: dict, warnings: list[str],
                        legacy_claim: str | None = None,
-                       sub_path: str | None = None) -> str:
+                       sub_path: str | None = None, output_dir: str = ".") -> str:
     """Convert a PVC volume mount to a compose volume string.
 
     ``sub_path`` (volumeMount.subPath) mounts <host_path>/<subPath>; compose's
     short bind syntax creates the directory if missing, like kubelet does.
+    Data left at the root by releases that ignored subPath keeps the root mount.
     """
     volumes_cfg = config.get("volumes") or {}
     if legacy_claim and claim not in volumes_cfg and legacy_claim in volumes_cfg:
@@ -88,6 +89,18 @@ def _convert_pvc_mount(claim: str, mount_path: str, pvc_names: set,
     if vol_cfg and isinstance(vol_cfg, dict) and "host_path" in vol_cfg:
         resolved = _resolve_host_path(vol_cfg["host_path"], config.get("volume_root", "./data"))
         if sub_path:
+            # Before subPath support the whole PVC root was mounted: if data sits there and
+            # the subdir doesn't exist yet, keep that mount instead of an empty one.
+            # CBA: "data" = non-empty root, so adding a new subPath mount to a PVC whose
+            # other subPaths already exist trips it too (mkdir the subdir to opt in).
+            # A genuine first run has no data dir yet, so it gets the subPath mount.
+            root = os.path.join(output_dir, resolved)
+            sub_dir = os.path.join(root, sub_path)
+            if not os.path.exists(sub_dir) and os.path.isdir(root) and os.listdir(root):
+                _warn_once(warnings, f"PVC '{claim}': data found at {resolved} but subPath '{sub_path}' "
+                                     f"is not there — keeping the old mount of the whole volume; move "
+                                     f"the data into {resolved.rstrip('/')}/{sub_path} to use subPath")
+                return f"{resolved}:{mount_path}"
             resolved = f"{resolved.rstrip('/')}/{sub_path}"
         return f"{resolved}:{mount_path}"
     if sub_path:
@@ -323,7 +336,7 @@ def convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: set
         if vol_type == "pvc":
             result.append(_convert_pvc_mount(source["claim"], mount_path, pvc_names, config,
                                              warnings, legacy_claim=source.get("legacy_claim"),
-                                             sub_path=vm.get("subPath")))
+                                             sub_path=vm.get("subPath"), output_dir=output_dir))
         elif vol_type == "emptydir":
             result.append(mount_path)
         elif vol_type == "configmap" and configmaps is not None:
