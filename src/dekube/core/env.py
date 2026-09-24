@@ -199,18 +199,26 @@ def resolve_env(container: dict, configmaps: dict[str, dict], secrets: dict[str,
                 workload_name: str, warnings: list[str],
                 replacements: list[dict] | None = None,
                 service_port_map: dict | None = None) -> list[dict]:
-    """Resolve env and envFrom into a flat list of {name: ..., value: ...}."""
-    env_vars: list[dict] = []
+    """Resolve env and envFrom into a flat list of {name: ..., value: ...}.
+
+    Kubernetes precedence: ``env`` overrides ``envFrom``; among ``envFrom``
+    sources the last one wins. Each name appears once (env names first).
+    """
+    by_name: dict[str, dict] = {}
 
     for e in (container.get("env") or []):
         if not e:  # null list item (Helm conditional inside env)
             continue
         resolved = _resolve_env_entry(e, configmaps, secrets, workload_name, warnings)
         if resolved:
-            env_vars.append(resolved)
+            by_name[resolved["name"]] = resolved
 
-    env_vars.extend(_resolve_envfrom(container.get("envFrom") or [], configmaps, secrets))
+    env_names = set(by_name)
+    for ev in _resolve_envfrom(container.get("envFrom") or [], configmaps, secrets):
+        if ev["name"] not in env_names:
+            by_name[ev["name"]] = ev
 
+    env_vars = list(by_name.values())
     _rewrite_env_values(env_vars, replacements=replacements,
                         service_port_map=service_port_map)
     return env_vars
