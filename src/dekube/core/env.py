@@ -133,7 +133,8 @@ def _resolve_envfrom(envfrom_list: list, configmaps: dict, secrets: dict) -> lis
                 env_vars.append({"name": f"{prefix}{k}", "value": v})
         elif "secretRef" in ef:
             sec = secrets.get((ef["secretRef"] or {}).get("name", ""), {})
-            for k in sec.get("data") or {}:
+            # stringData is merged into data on write (stringData wins, via secret_value)
+            for k in dict.fromkeys(list(sec.get("data") or {}) + list(sec.get("stringData") or {})):
                 val = secret_value(sec, k)
                 if val is not None:
                     env_vars.append({"name": f"{prefix}{k}", "value": val})
