@@ -44,6 +44,24 @@ def secret_value(secret: dict, key: str) -> str | None:
 _secret_value = secret_value
 
 
+def _secret_bytes(secret: dict, key: str) -> bytes | None:
+    """Raw bytes of a K8s Secret key, as kubelet mounts them.
+
+    stringData is UTF-8-encoded, data base64-decoded. None if the key is
+    absent or its data isn't valid base64.
+    """
+    val = (secret.get("stringData") or {}).get(key)
+    if val is not None:
+        return str(val).encode("utf-8")
+    val = (secret.get("data") or {}).get(key)
+    if val is not None:
+        try:
+            return base64.b64decode(val)
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
 def log(name: str, msg: str) -> None:
     """Print an extension log line to stderr: ``  [name] msg``."""
     print(f"  [{name}] {msg}", file=sys.stderr)

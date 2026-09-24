@@ -2,7 +2,7 @@
 
 import re
 
-from dekube.pacts.helpers import apply_replacements, secret_value
+from dekube.pacts.helpers import apply_replacements, secret_value, _secret_bytes
 from dekube.core.constants import _K8S_VAR_REF_RE, _URL_BOUNDARY
 
 
@@ -73,6 +73,18 @@ def _escape_shell_vars_for_compose(obj):
     return obj
 
 
+def _is_binary_secret(secret: dict, key: str) -> bool:
+    """True if a Secret key holds non-UTF-8 bytes (a compose env value can't carry them)."""
+    raw = _secret_bytes(secret, key)
+    if raw is None:
+        return False
+    try:
+        raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return True
+    return False
+
+
 def _resolve_env_entry(entry: dict, configmaps: dict, secrets: dict,
                        workload_name: str, warnings: list[str]) -> dict | None:
     """Resolve a single K8s env entry (value, configMapKeyRef, or secretKeyRef)."""
@@ -96,7 +108,14 @@ def _resolve_env_entry(entry: dict, configmaps: dict, secrets: dict,
             )
     elif "secretKeyRef" in vf:
         ref = vf["secretKeyRef"] or {}
-        val = secret_value(secrets.get(ref.get("name", ""), {}), ref.get("key", ""))
+        sec = secrets.get(ref.get("name", ""), {})
+        if _is_binary_secret(sec, ref.get("key", "")):
+            warnings.append(
+                f"secretKeyRef '{ref.get('name')}/{ref.get('key')}' on {workload_name} "
+                f"holds binary (non-UTF-8) data — env var '{name}' skipped"
+            )
+            return None
+        val = secret_value(sec, ref.get("key", ""))
         if val is not None:
             return {"name": name, "value": val}
         if not ref.get("optional"):
@@ -120,7 +139,8 @@ def _resolve_env_entry(entry: dict, configmaps: dict, secrets: dict,
     return None
 
 
-def _resolve_envfrom(envfrom_list: list, configmaps: dict, secrets: dict) -> list[dict]:
+def _resolve_envfrom(envfrom_list: list, configmaps: dict, secrets: dict,
+                     workload_name: str = "", warnings: list[str] | None = None) -> list[dict]:
     """Resolve envFrom entries (configMapRef, secretRef) into flat env vars."""
     env_vars: list[dict] = []
     for ef in envfrom_list:
@@ -132,9 +152,15 @@ def _resolve_envfrom(envfrom_list: list, configmaps: dict, secrets: dict) -> lis
             for k, v in (cm.get("data") or {}).items():
                 env_vars.append({"name": f"{prefix}{k}", "value": v})
         elif "secretRef" in ef:
-            sec = secrets.get((ef["secretRef"] or {}).get("name", ""), {})
+            sec_name = (ef["secretRef"] or {}).get("name", "")
+            sec = secrets.get(sec_name, {})
             # stringData is merged into data on write (stringData wins, via secret_value)
             for k in dict.fromkeys(list(sec.get("data") or {}) + list(sec.get("stringData") or {})):
+                if _is_binary_secret(sec, k):
+                    if warnings is not None:
+                        warnings.append(f"envFrom secret '{sec_name}' key '{k}' on {workload_name} "
+                                        f"holds binary (non-UTF-8) data — skipped")
+                    continue
                 val = secret_value(sec, k)
                 if val is not None:
                     env_vars.append({"name": f"{prefix}{k}", "value": val})
@@ -215,7 +241,8 @@ def resolve_env(container: dict, configmaps: dict[str, dict], secrets: dict[str,
             by_name[resolved["name"]] = resolved
 
     env_names = set(by_name)
-    for ev in _resolve_envfrom(container.get("envFrom") or [], configmaps, secrets):
+    for ev in _resolve_envfrom(container.get("envFrom") or [], configmaps, secrets,
+                               workload_name, warnings):
         if ev["name"] not in env_names:
             by_name[ev["name"]] = ev
 

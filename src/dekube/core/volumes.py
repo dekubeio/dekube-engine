@@ -3,7 +3,7 @@
 import base64
 import os
 
-from dekube.pacts.helpers import apply_replacements, is_excluded, secret_value
+from dekube.pacts.helpers import apply_replacements, is_excluded, _secret_bytes
 from dekube.core.env import _apply_port_remap
 
 
@@ -147,18 +147,26 @@ def _generate_secret_files(sec_name: str, secret: dict, items: list | None,
                            output_dir: str, generated_secrets: set,
                            warnings: list[str],
                            replacements: list[dict] | None = None) -> str:
-    """Write Secret data entries as files. Returns the directory path (relative)."""
+    """Write Secret data entries as files. Returns the directory path (relative).
+
+    Files hold the decoded bytes, as kubelet mounts them; replacements only
+    apply to values that are UTF-8 text.
+    """
     rel_dir = os.path.join("secrets", sec_name)
     abs_dir = os.path.join(output_dir, rel_dir)
     if sec_name not in generated_secrets:
         generated_secrets.add(sec_name)
         os.makedirs(abs_dir, exist_ok=True)
         for key, out_name in _resolve_secret_keys(secret, items):
-            val = secret_value(secret, key)
-            if val is None:
+            raw = _secret_bytes(secret, key)
+            if raw is None:
                 warnings.append(f"Secret '{sec_name}' key '{key}' could not be decoded — skipped")
                 continue
-            if replacements:
+            try:
+                val = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                val = None  # binary (keystore, DER cert…): written as-is
+            if val is not None and replacements:
                 val = apply_replacements(val, replacements)
             out_path = os.path.join(abs_dir, out_name)
             if not os.path.realpath(out_path).startswith(os.path.realpath(output_dir) + os.sep):
@@ -166,8 +174,12 @@ def _generate_secret_files(sec_name: str, secret: dict, items: list | None,
                 continue
             if "/" in out_name:
                 os.makedirs(os.path.dirname(out_path), exist_ok=True)
-            with open(out_path, "w", encoding="utf-8") as f:
-                f.write(val)
+            if val is None:
+                with open(out_path, "wb") as f:
+                    f.write(raw)
+            else:
+                with open(out_path, "w", encoding="utf-8") as f:
+                    f.write(val)
     return f"./{rel_dir}"
 
 
