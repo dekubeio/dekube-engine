@@ -56,13 +56,14 @@ def _resolve_k8s_var_refs(obj, env_dict: dict[str, str]):
 
 
 def _escape_shell_vars_for_compose(obj):
-    """Escape $VAR references in command/entrypoint so compose doesn't interpolate them.
+    """Escape every $ in command/entrypoint so compose doesn't interpolate them.
 
-    Compose treats $VAR and ${VAR} as variable substitution from host env / .env file.
-    Container commands that use shell $VAR expansion need $$ escaping in compose YAML.
+    Compose treats $VAR, ${VAR} and $$ as interpolation syntax. The input is kubelet's
+    output (after $(VAR) resolution), so every remaining $ is meant for the container
+    ($VAR, $$ PID, ${X}) and must reach it literally.
     """
     if isinstance(obj, str):
-        return re.sub(r'\$(?=[A-Za-z_{])', '$$', obj)
+        return obj.replace("$", "$$")
     if isinstance(obj, list):
         return [_escape_shell_vars_for_compose(item) for item in obj]
     return obj
