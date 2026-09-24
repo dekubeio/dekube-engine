@@ -20,7 +20,9 @@ _K8S_DNS_RE = re.compile(
 )
 
 # Placeholder for referencing secrets in overrides/custom services: $secret:<name>:<key>
-_SECRET_REF_RE = re.compile(r'\$secret:([^:]+):([^:}\s]+)')
+# The key stops at the first char a K8s Secret key can't hold ([-._a-zA-Z0-9]),
+# so "$secret:db:password@db:5432" doesn't swallow the "@db" of a URL.
+_SECRET_REF_RE = re.compile(r'\$secret:([^:]+):([-._a-zA-Z0-9]+)')
 
 # K8s kinds we warn about (not convertible to compose)
 UNSUPPORTED_KINDS = (
