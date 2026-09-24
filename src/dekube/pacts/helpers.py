@@ -14,11 +14,11 @@ from dekube.core.constants import WORKLOAD_KINDS, _K8S_DNS_RE
 def apply_replacements(text: str, replacements: list[dict]) -> str:
     """Apply user-defined string replacements from config.
 
-    Malformed entries (not a mapping, or missing ``old``) are skipped rather
+    Malformed entries (not a mapping, or an empty/null ``old``) are skipped rather
     than crashing the run — ``replacements`` is a user-edited config field.
     """
     for r in (replacements or []):
-        if not isinstance(r, dict) or "old" not in r:
+        if not isinstance(r, dict) or not r.get("old"):
             continue
         text = text.replace(r["old"], r.get("new") or "")
     return text
