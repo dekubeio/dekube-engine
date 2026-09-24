@@ -43,13 +43,17 @@ def _is_transform_class(obj, mod_name):
 
 
 def _load_module(filepath):
-    """Load a single extension module, return it or None on failure."""
+    """Load a single extension module. Exits non-zero on failure.
+
+    Fail fast: a silently skipped extension produces a wrong compose.
+    """
     parent = str(Path(filepath).parent)
     # Prefix avoids collisions with stdlib modules (e.g. "secrets" → "dekube_op_secrets")
     mod_name = f"dekube_op_{Path(filepath).stem}"
     spec = importlib.util.spec_from_file_location(mod_name, filepath)
     if spec is None or spec.loader is None:
-        return None
+        print(f"Error: cannot load extension {filepath}", file=sys.stderr)
+        sys.exit(1)
     # Temporarily add parent to sys.path for the extension's own imports,
     # then restore to avoid shadowing stdlib/third-party modules.
     added = parent not in sys.path
@@ -64,8 +68,9 @@ def _load_module(filepath):
         return module
     except Exception as exc:  # pylint: disable=broad-except
         sys.modules.pop(mod_name, None)
-        print(f"Warning: failed to load {filepath}: {exc}", file=sys.stderr)
-        return None
+        print(f"Error: failed to load extension {filepath}: "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        sys.exit(1)
     finally:
         if added and parent in sys.path:
             sys.path.remove(parent)
@@ -105,9 +110,7 @@ def _load_extensions(extensions_dir):
     transforms = []
     rewriters = []
     for filepath in _discover_extension_files(extensions_dir):
-        module = _load_module(filepath)
-        if module:
-            _classify_module(module, converters, transforms, rewriters)
+        _classify_module(_load_module(filepath), converters, transforms, rewriters)
 
     # Sort by priority (lower = earlier). Default 1000.
     converters.sort(key=lambda c: getattr(c, 'priority', 1000))
