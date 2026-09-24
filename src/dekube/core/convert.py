@@ -109,25 +109,18 @@ def _emit_kind_warnings(manifests: dict, warnings: list[str]) -> None:
             warnings.append(f"unknown kind '{kind}' ({len(items)} manifest(s)) — skipped")
 
 
-def convert(manifests: dict[str, list[dict]], config: dict,
-            output_dir: str = ".", first_run: bool = False) -> tuple[dict, list[dict], list[str], dict]:
-    """Main conversion: returns (compose_services, ingress_entries, warnings, compose_extras)."""
-    warnings: list[str] = []
+def _run_converters(ctx: ConvertContext, manifests: dict, extensions_config: dict,
+                    warnings: list[str]) -> tuple[dict, list[dict], dict]:
+    """Dispatch manifests to converters in priority order.
 
-    # Build context with empty containers — indexers populate them
-    ctx = ConvertContext(
-        config=config, output_dir=output_dir,
-        replacements=config.get("replacements", []),
-        warnings=warnings, manifests=manifests,
-        first_run=first_run,
-    )
-
-    # Dispatch to converters in priority order
-    extensions_config = config.get("extensions") or {}
+    Returns (compose_services, ingress_entries, env_done) — env_done tracks
+    which services' env resolve_env already remapped/replaced, per transform.
+    Also mutates ``ctx`` in place (extension_config, replacements — $secret:
+    refs resolved once, before the first provider consumes them).
+    """
     compose_services: dict = {}
     ingress_entries: list[dict] = []
     raw_replacements = ctx.replacements
-    # services whose env resolve_env already remapped / replaced, per transform
     env_done: dict[str, set] = {"remap": set(), "replace": set()}
     for converter in sorted(_CONVERTERS, key=lambda c: getattr(c, 'priority', 1000)):
         ext_name = getattr(converter, 'name', '')
@@ -161,6 +154,55 @@ def convert(manifests: dict[str, list[dict]], config: dict,
                         done.difference_update(services)
             ingress_entries.extend(getattr(result, 'ingress_entries', None) or [])
 
+    return compose_services, ingress_entries, env_done
+
+
+def _manage_pvc_volumes(ctx: ConvertContext, config: dict, warnings: list[str],
+                        first_run: bool) -> None:
+    """Auto-populate PVC volumes on first run, detect stale ones on subsequent runs."""
+    config_volumes = config.get("volumes") or {}
+    if first_run:
+        for pvc in sorted(ctx.pvc_names):
+            if pvc not in config_volumes:
+                config.setdefault("volumes", {})[pvc] = {"host_path": pvc}
+    else:
+        for vol_name in sorted(config_volumes):
+            if vol_name not in ctx.pvc_names:
+                warnings.append(f"volume '{vol_name}' in dekube.yaml not referenced by any PVC — stale?")
+
+
+def _run_transforms(compose_services: dict, ingress_entries: list[dict],
+                    ctx: ConvertContext, extensions_config: dict) -> None:
+    """Run post-processing transform hooks after all alias injection."""
+    for transform_cls in _TRANSFORMS:
+        ext_name = getattr(transform_cls, 'name', '')
+        ext_conf = extensions_config.get(ext_name) or {}
+        if not ext_conf.get("enabled", True):
+            print(f"Transform disabled: {ext_name}", file=sys.stderr)
+            continue
+        ctx.extension_config = ext_conf
+        transform_cls.transform(compose_services, ingress_entries, ctx)
+
+
+def convert(manifests: dict[str, list[dict]], config: dict,
+            output_dir: str = ".", first_run: bool = False) -> tuple[dict, list[dict], list[str], dict]:
+    """Main conversion: returns (compose_services, ingress_entries, warnings, compose_extras)."""
+    warnings: list[str] = []
+
+    # Build context with empty containers — indexers populate them
+    ctx = ConvertContext(
+        config=config, output_dir=output_dir,
+        replacements=config.get("replacements", []),
+        warnings=warnings, manifests=manifests,
+        first_run=first_run,
+    )
+
+    # Dispatch to converters in priority order
+    extensions_config = config.get("extensions") or {}
+    raw_replacements = ctx.replacements
+    compose_services, ingress_entries, env_done = _run_converters(
+        ctx, manifests, extensions_config, warnings)
+
     if not first_run:
         _warn_legacy_vct_mappings(manifests, config, warnings)
 
@@ -180,29 +222,14 @@ def convert(manifests: dict[str, list[dict]], config: dict,
     _warn_missing_fqdn(compose_services, network_aliases, ctx.services_by_selector, warnings)
 
     # PVC volume management: auto-populate on first run, detect stale on subsequent
-    config_volumes = config.get("volumes") or {}
-    if first_run:
-        for pvc in sorted(ctx.pvc_names):
-            if pvc not in config_volumes:
-                config.setdefault("volumes", {})[pvc] = {"host_path": pvc}
-    else:
-        for vol_name in sorted(config_volumes):
-            if vol_name not in ctx.pvc_names:
-                warnings.append(f"volume '{vol_name}' in dekube.yaml not referenced by any PVC — stale?")
+    _manage_pvc_volumes(ctx, config, warnings, first_run)
 
     _emit_kind_warnings(manifests, warnings)
 
     _truncate_hostnames(compose_services, warnings)
 
     # Run transforms (post-processing hooks) after all alias injection
-    for transform_cls in _TRANSFORMS:
-        ext_name = getattr(transform_cls, 'name', '')
-        ext_conf = extensions_config.get(ext_name) or {}
-        if not ext_conf.get("enabled", True):
-            print(f"Transform disabled: {ext_name}", file=sys.stderr)
-            continue
-        ctx.extension_config = ext_conf
-        transform_cls.transform(compose_services, ingress_entries, ctx)
+    _run_transforms(compose_services, ingress_entries, ctx, extensions_config)
 
     # Escape $ in generated env so compose doesn't interpolate secrets.
     # After transforms (they add env too), before overrides (user values stay raw).
