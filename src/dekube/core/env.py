@@ -162,12 +162,18 @@ def _resolve_envfrom(envfrom_list: list, configmaps: dict, secrets: dict,
     return env_vars
 
 
+# Bumped each time resolve_env rewrites values (port remap + replacements), so
+# convert() can keep _postprocess_env off the services of providers that used it:
+# neither transform is idempotent (chained remaps, a "new" containing its "old").
+_ENV_REWRITES = [0]
+
+
 def _postprocess_env(services: dict, ctx) -> None:
-    """Apply port remapping and replacements to all services.
+    """Apply port remapping and replacements to services' env.
 
     Providers that build services from scratch may not apply port remapping or
     user-defined replacements to their env vars. This pass catches them.
-    Safe to run on already-processed services (idempotent).
+    NOT idempotent: pass only services whose env hasn't been rewritten yet.
     """
     for _svc_name, svc in services.items():
         env = svc.get("environment")
@@ -249,6 +255,8 @@ def resolve_env(container: dict, configmaps: dict[str, dict], secrets: dict[str,
             by_name[ev["name"]] = ev
 
     env_vars = list(by_name.values())
+    if replacements is not None or service_port_map is not None:
+        _ENV_REWRITES[0] += 1
     _rewrite_env_values(env_vars, replacements=replacements,
                         service_port_map=service_port_map)
     return env_vars

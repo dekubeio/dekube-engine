@@ -11,7 +11,7 @@ from dekube.pacts.helpers import secret_value
 from dekube.core.constants import (
     UNSUPPORTED_KINDS, IGNORED_KINDS, _SECRET_REF_RE,
 )
-from dekube.core.env import _postprocess_env, _escape_env_dollars
+from dekube.core.env import _postprocess_env, _escape_env_dollars, _ENV_REWRITES
 from dekube.core.services import _build_network_aliases
 from dekube.core.volumes import _warn_legacy_vct_mappings
 
@@ -127,6 +127,7 @@ def convert(manifests: dict[str, list[dict]], config: dict,
     compose_services: dict = {}
     ingress_entries: list[dict] = []
     raw_replacements = ctx.replacements
+    env_rewritten: set = set()  # services whose env resolve_env already rewrote
     for converter in sorted(_CONVERTERS, key=lambda c: getattr(c, 'priority', 1000)):
         ext_name = getattr(converter, 'name', '')
         ext_conf = extensions_config.get(ext_name) or {}
@@ -140,6 +141,7 @@ def convert(manifests: dict[str, list[dict]], config: dict,
             ctx.replacements = _resolve_secret_refs(raw_replacements, ctx.secrets, warnings,
                                                     escape=False)
         for kind in converter.kinds:
+            rewrites_before = _ENV_REWRITES[0]
             result = converter.convert(kind, manifests.get(kind, []), ctx)
             if result is None:
                 warnings.append(f"converter {type(converter).__name__} returned None "
@@ -148,6 +150,13 @@ def convert(manifests: dict[str, list[dict]], config: dict,
             services = getattr(result, 'services', None)
             if services:
                 compose_services.update(services)
+                # CBA: granularity is one convert() call — a provider mixing resolve_env
+                # and hand-built env in one call gets no post-pass on the latter.
+                # Upgrade path: have resolve_env callers flag their services explicitly.
+                if _ENV_REWRITES[0] != rewrites_before:
+                    env_rewritten.update(services)
+                else:
+                    env_rewritten.difference_update(services)
             ingress_entries.extend(getattr(result, 'ingress_entries', None) or [])
 
     if not first_run:
@@ -157,9 +166,9 @@ def convert(manifests: dict[str, list[dict]], config: dict,
         ctx.replacements = _resolve_secret_refs(raw_replacements, ctx.secrets, warnings,
                                                 escape=False)
 
-    # Post-process all services: port remapping and replacements.
-    # Idempotent — safe on services whose env vars were already rewritten by a provider.
-    _postprocess_env(compose_services, ctx)
+    # Port remapping and replacements for services whose env didn't go through
+    # resolve_env (which applies both already): each runs exactly once per value.
+    _postprocess_env({n: s for n, s in compose_services.items() if n not in env_rewritten}, ctx)
 
     # Add network aliases so K8s FQDNs resolve via compose DNS
     network_aliases = _build_network_aliases(ctx.services_by_selector, ctx.alias_map,
