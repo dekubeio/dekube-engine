@@ -138,6 +138,18 @@ def _override_rewriters(extra_rewriters, rewriters):
     rewriters.sort(key=lambda r: getattr(r, 'priority', 1000))
 
 
+def _override_transforms(extra_transforms, transforms):
+    """Override built-in transforms with external ones sharing the same name."""
+    ext_names = {getattr(t, 'name', '') for t in extra_transforms} - {''}
+    overridden = ext_names & {getattr(t, 'name', '') for t in transforms}
+    if overridden:
+        transforms[:] = [t for t in transforms if getattr(t, 'name', '') not in overridden]
+        for name in sorted(overridden):
+            print(f"Transform overrides built-in: {name}", file=sys.stderr)
+    transforms.extend(extra_transforms)
+    transforms.sort(key=lambda t: getattr(t, 'priority', 1000))
+
+
 def _check_duplicate_kinds(extra_converters):
     """Check for duplicate kind claims between extension converters. Exits on conflict."""
     ext_kind_owners: dict[str, str] = {}
@@ -167,8 +179,7 @@ def _override_converters(ext_kind_owners, converters):
 def _register_extensions(extra_converters, extra_transforms, extra_rewriters,
                          converters, transforms, rewriters, converted_kinds):
     """Register loaded extensions into the provided registries."""
-    transforms.extend(extra_transforms)
-    transforms.sort(key=lambda t: getattr(t, 'priority', 1000))
+    _override_transforms(extra_transforms, transforms)
     _override_rewriters(extra_rewriters, rewriters)
     ext_kind_owners = _check_duplicate_kinds(extra_converters)
     _override_converters(ext_kind_owners, converters)
