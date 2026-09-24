@@ -209,8 +209,9 @@ def _top_level_defs(text: str) -> dict[str, str]:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             names = [node.name]
         elif isinstance(node, ast.Assign):
+            # Store context only: `Foo.priority = 800` binds nothing at top level
             names = [n.id for t in node.targets for n in ast.walk(t)
-                     if isinstance(n, ast.Name)]
+                     if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)]
         elif isinstance(node, (ast.AnnAssign, ast.AugAssign)) and isinstance(node.target, ast.Name):
             names = [node.target.id]
         else:
