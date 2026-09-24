@@ -65,18 +65,34 @@ def _resolve_host_path(host_path: str, volume_root: str) -> str:
 
 def _convert_pvc_mount(claim: str, mount_path: str, pvc_names: set,
                        config: dict, warnings: list[str],
-                       legacy_claim: str | None = None) -> str:
-    """Convert a PVC volume mount to a compose volume string."""
+                       legacy_claim: str | None = None,
+                       sub_path: str | None = None) -> str:
+    """Convert a PVC volume mount to a compose volume string.
+
+    ``sub_path`` (volumeMount.subPath) mounts <host_path>/<subPath>; compose's
+    short bind syntax creates the directory if missing, like kubelet does.
+    """
     volumes_cfg = config.get("volumes") or {}
     if legacy_claim and claim not in volumes_cfg and legacy_claim in volumes_cfg:
         # dekube.yaml from before <vct>-<sts> naming: keep the user's data path.
         # Warned once per claim by _warn_legacy_vct_mappings.
         claim = legacy_claim
     pvc_names.add(claim)
+    if sub_path and (sub_path.startswith("/") or ".." in sub_path.split("/")):
+        warnings.append(f"PVC '{claim}': subPath '{sub_path}' must be a relative path "
+                        f"without '..' — mounting the volume root")
+        sub_path = None
     vol_cfg = volumes_cfg.get(claim)
     if vol_cfg and isinstance(vol_cfg, dict) and "host_path" in vol_cfg:
         resolved = _resolve_host_path(vol_cfg["host_path"], config.get("volume_root", "./data"))
+        if sub_path:
+            resolved = f"{resolved.rstrip('/')}/{sub_path}"
         return f"{resolved}:{mount_path}"
+    if sub_path:
+        # CBA: compose's long syntax (volume.subpath) could do this, but transforms
+        # parse volume strings. Upgrade path: emit the long form once they accept dicts.
+        warnings.append(f"PVC '{claim}' is a named volume: subPath '{sub_path}' not supported "
+                        f"— mounting the volume root at {mount_path}")
     if vol_cfg is not None:
         return f"{claim}:{mount_path}"
     warnings.append(f"PVC '{claim}' has no mapping in dekube.yaml — add it manually")
@@ -281,10 +297,14 @@ def convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: set
         source = vol_map.get(vm.get("name", ""), {})
         mount_path = vm.get("mountPath", "")
         vol_type = source.get("type")
+        if vm.get("subPathExpr"):
+            warnings.append(f"volumeMount '{vm.get('name', '')}' on {workload_name}: subPathExpr "
+                            f"not supported — mounting the volume root at {mount_path}")
 
         if vol_type == "pvc":
             result.append(_convert_pvc_mount(source["claim"], mount_path, pvc_names, config,
-                                             warnings, legacy_claim=source.get("legacy_claim")))
+                                             warnings, legacy_claim=source.get("legacy_claim"),
+                                             sub_path=vm.get("subPath")))
         elif vol_type == "emptydir":
             result.append(mount_path)
         elif vol_type == "configmap" and configmaps is not None:
