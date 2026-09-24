@@ -113,11 +113,13 @@ def _file_mode(mode, fallback: int) -> int:
 
 def _host_mode(mode: int) -> int:
     """Mode applied to a generated file on the host."""
-    # CBA: read bits are forced on for group/other. The files are bind-mounted owned
+    # CBA: 0644 is forced on. Read for group/other: the files are bind-mounted owned
     # by the host user (not root/fsGroup as in K8s), so an exact 0400/0600 would make
-    # them unreadable to a container running as any other uid. Exec bits follow K8s.
-    # Upgrade path: exact modes once something chowns these files to the container uid.
-    return (mode & 0o777) | 0o444
+    # them unreadable to a container running as any other uid. Owner write: the next
+    # run (and flatten-internal-urls) rewrites them in place; mounts are :ro anyway.
+    # Exec bits follow K8s. Upgrade path: exact modes once something chowns these
+    # files to the container uid.
+    return (mode & 0o777) | 0o644
 
 
 def _resolve_data_keys(available_keys: list, items: list | None,
