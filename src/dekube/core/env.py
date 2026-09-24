@@ -230,7 +230,12 @@ def resolve_env(container: dict, configmaps: dict[str, dict], secrets: dict[str,
 
     Kubernetes precedence: ``env`` overrides ``envFrom``; among ``envFrom``
     sources the last one wins. Each name appears once (env names first).
+    Literal ``value``s get kubelet's $(VAR) expansion against envFrom and the
+    env vars declared before them.
     """
+    from_envfrom = _resolve_envfrom(container.get("envFrom") or [], configmaps, secrets,
+                                    workload_name, warnings)
+    known = {ev["name"]: "" if ev["value"] is None else str(ev["value"]) for ev in from_envfrom}
     by_name: dict[str, dict] = {}
 
     for e in (container.get("env") or []):
@@ -238,11 +243,13 @@ def resolve_env(container: dict, configmaps: dict[str, dict], secrets: dict[str,
             continue
         resolved = _resolve_env_entry(e, configmaps, secrets, workload_name, warnings)
         if resolved:
+            if "value" in e and isinstance(resolved["value"], str):
+                resolved["value"] = _resolve_k8s_var_refs(resolved["value"], known)
             by_name[resolved["name"]] = resolved
+            known[resolved["name"]] = "" if resolved["value"] is None else str(resolved["value"])
 
     env_names = set(by_name)
-    for ev in _resolve_envfrom(container.get("envFrom") or [], configmaps, secrets,
-                               workload_name, warnings):
+    for ev in from_envfrom:
         if ev["name"] not in env_names:
             by_name[ev["name"]] = ev
 
