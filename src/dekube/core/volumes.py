@@ -49,7 +49,9 @@ def _build_vol_map(pod_volumes: list,
         elif "emptyDir" in v:
             vol_map[vname] = {"type": "emptydir"}
         else:
-            vol_map[vname] = {"type": "unknown"}
+            # hostPath, projected, downwardAPI, csi, … — dropped (warned at mount time)
+            kind = next((k for k in v if k != "name"), "?")
+            vol_map[vname] = {"type": "unknown", "kind": kind}
     return vol_map
 
 
@@ -276,6 +278,12 @@ def _convert_data_mount(data_dir: str, vm: dict) -> str:
     return f"{data_dir}:{mount_path}:ro"
 
 
+def _warn_once(warnings: list[str], msg: str) -> None:
+    """Append ``msg`` unless already there (one warning per workload/volume)."""
+    if msg not in warnings:
+        warnings.append(msg)
+
+
 def convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: set,
                            config: dict, workload_name: str, warnings: list[str],
                            configmaps: dict | None = None, secrets: dict | None = None,
@@ -294,9 +302,18 @@ def convert_volume_mounts(volume_mounts: list, pod_volumes: list, pvc_names: set
     for vm in volume_mounts:
         if not vm:  # null list item (Helm conditional inside volumeMounts)
             continue
-        source = vol_map.get(vm.get("name", ""), {})
+        vname = vm.get("name", "")
+        source = vol_map.get(vname, {})
         mount_path = vm.get("mountPath", "")
         vol_type = source.get("type")
+        if not source:
+            _warn_once(warnings, f"volumeMount '{vname}' on {workload_name} names an "
+                                 f"undeclared volume — skipped")
+        elif vol_type == "unknown":
+            # CBA: projected is dropped too, though its configMap/secret sources could be
+            # merged into one generated dir. Upgrade path: support those two source types.
+            _warn_once(warnings, f"volume '{vname}' on {workload_name} has unsupported type "
+                                 f"'{source['kind']}' — mount skipped")
         if vm.get("subPathExpr"):
             warnings.append(f"volumeMount '{vm.get('name', '')}' on {workload_name}: subPathExpr "
                             f"not supported — mounting the volume root at {mount_path}")
