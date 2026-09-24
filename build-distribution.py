@@ -348,7 +348,6 @@ def main():
         print(f"Local dev mode: reading core from {args.core_dir}", file=sys.stderr)
         all_imports, all_bodies = build_core_body_from_local(args.core_dir)
         src_dir = args.core_dir / "src" / "dekube"
-        base_sources = [(f"engine:{m}", (src_dir / m).read_text()) for m in CORE_MODULES]
     elif args.base:
         print(f"Local base mode: reading from {args.base}", file=sys.stderr)
         all_imports, all_bodies = build_base_body_from_file(args.base)
@@ -357,7 +356,9 @@ def main():
               file=sys.stderr)
         all_imports, all_bodies = build_base_body_from_release(
             args.base_distribution, args.base_version)
-    if not args.core_dir:
+    if args.core_dir:
+        base_sources = [(f"engine:{m}", (src_dir / m).read_text()) for m in CORE_MODULES]
+    else:
         # A pre-built base is one source: its own internals were checked when it was built
         base_sources = [(f"base:{args.base or args.base_distribution}", "".join(all_bodies))]
 
@@ -416,14 +417,14 @@ def main():
     lines.append('\n\nif __name__ == "__main__":\n')
     lines.append("    main()\n")
 
-    output.write_text("".join(lines))
+    output.write_text("".join(lines), encoding="utf-8")
     total_lines = "".join(lines).count("\n")
     print(f"Built {output} ({total_lines} lines)")
 
     # Step 8: Smoke test
     result = subprocess.run(
         [sys.executable, str(output), "--help"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     if result.returncode != 0:
         print(f"Smoke test FAILED:\n{result.stderr}", file=sys.stderr)

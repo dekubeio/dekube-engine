@@ -150,7 +150,7 @@ def main():
     # Smoke test
     result = subprocess.run(
         [sys.executable, str(OUTPUT), "--help"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     if result.returncode != 0:
         print(f"Smoke test FAILED:\n{result.stderr}", file=sys.stderr)
